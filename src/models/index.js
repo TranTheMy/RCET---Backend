@@ -8,8 +8,12 @@ const Task = require('./Task');
 const Milestone = require('./Milestone');
 const MilestoneTask = require('./MilestoneTask');
 const WeeklyReport = require('./WeeklyReport');
+const Comment = require('./Comment');
+const ForumPost = require('./ForumPost');
+const ForumComment = require('./ForumComment');
+const ForumLike = require('./ForumLike');
 
-// ======== User & Approval Associations ========
+// ======== User & Approval Associations ======
 User.hasMany(ApprovalRequest, { foreignKey: 'user_id', as: 'approvalRequests' });
 ApprovalRequest.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 ApprovalRequest.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
@@ -50,6 +54,24 @@ WeeklyReport.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 WeeklyReport.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(WeeklyReport, { foreignKey: 'user_id', as: 'weeklyReports' });
 
+// WeeklyReport <-> Comments
+WeeklyReport.hasMany(Comment, { foreignKey: 'weekly_report_id', as: 'comments' });
+Comment.belongsTo(WeeklyReport, { foreignKey: 'weekly_report_id', as: 'weeklyReport' });
+Comment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(Comment, { foreignKey: 'user_id', as: 'comments' });
+
+// Forum associations
+ForumPost.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
+User.hasMany(ForumPost, { foreignKey: 'user_id', as: 'forumPosts' });
+ForumPost.hasMany(ForumComment, { foreignKey: 'post_id', as: 'comments' });
+ForumComment.belongsTo(ForumPost, { foreignKey: 'post_id', as: 'post' });
+ForumComment.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
+User.hasMany(ForumComment, { foreignKey: 'user_id', as: 'forumComments' });
+ForumPost.hasMany(ForumLike, { foreignKey: 'post_id', as: 'likes' });
+ForumLike.belongsTo(ForumPost, { foreignKey: 'post_id', as: 'post' });
+ForumLike.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(ForumLike, { foreignKey: 'user_id', as: 'forumLikes' });
+
 module.exports = {
   sequelize,
   User,
@@ -61,4 +83,8 @@ module.exports = {
   Milestone,
   MilestoneTask,
   WeeklyReport,
+  Comment,
+  ForumPost,
+  ForumComment,
+  ForumLike,
 };

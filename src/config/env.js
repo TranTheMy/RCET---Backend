@@ -12,8 +12,8 @@ const env = {
     port: parseInt(process.env.DB_PORT, 10) || 1433,
     name: process.env.DB_NAME || 'rcet_lab',
     user: process.env.DB_USER || 'sa',
-    password: process.env.DB_PASSWORD || '',
-    encrypt: process.env.DB_ENCRYPT === 'true',
+    password: process.env.DB_PASSWORD || '1',
+    encrypt: process.env.DB_ENCRYPT === 'false',
   },
 
   jwt: {
