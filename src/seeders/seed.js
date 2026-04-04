@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const {
   sequelize, User, Project, ProjectMember, Task, Milestone, WeeklyReport,
+  VerilogProblem, VerilogTestCase,
 } = require('../models');
 const {
   USER_STATUS, SYSTEM_ROLES, PROJECT_STATUS, PROJECT_ROLES,
@@ -541,6 +542,121 @@ const seed = async () => {
       }
     }
     logger.info('Seeded weekly reports');
+
+    // ── 7. Verilog Problems & Test Cases ─────────────────────────────────
+    const verilogProblemDefs = [
+      {
+        key: 'hello_verilog',
+        name: 'Hello Verilog',
+        description: 'Bài tập cơ bản nhất: gán đầu ra bằng đầu vào.\n\nViết một module Verilog nhận một tín hiệu đầu vào và gán trực tiếp cho đầu ra.',
+        description_input: 'input wire in',
+        description_output: 'output wire out',
+        level: 'easy',
+        tags: 'combinational,basic',
+        template_code: 'module hello_verilog(\n    input wire in,\n    output wire out\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Input 0', input: 'in=0', expected_output: 'out=0', grade: 5, order_index: 0 },
+          { name: 'Input 1', input: 'in=1', expected_output: 'out=1', grade: 5, order_index: 1 },
+        ],
+      },
+      {
+        key: 'and_gate',
+        name: 'AND Gate',
+        description: 'Thiết kế cổng AND 2 đầu vào.\n\nModule nhận 2 tín hiệu đầu vào a, b và xuất kết quả phép AND ra đầu ra y.',
+        description_input: 'input wire a, b',
+        description_output: 'output wire y',
+        level: 'easy',
+        tags: 'combinational,gate',
+        template_code: 'module and_gate(\n    input wire a,\n    input wire b,\n    output wire y\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'a=0,b=0', input: 'a=0,b=0', expected_output: 'y=0', grade: 5, order_index: 0 },
+          { name: 'a=0,b=1', input: 'a=0,b=1', expected_output: 'y=0', grade: 5, order_index: 1 },
+          { name: 'a=1,b=0', input: 'a=1,b=0', expected_output: 'y=0', grade: 5, order_index: 2 },
+          { name: 'a=1,b=1', input: 'a=1,b=1', expected_output: 'y=1', grade: 5, order_index: 3 },
+        ],
+      },
+      {
+        key: 'adder_4bit',
+        name: '4-bit Adder',
+        description: 'Thiết kế bộ cộng 4-bit.\n\nModule nhận hai số 4-bit a và b, xuất tổng sum (4-bit) và carry out cout.',
+        description_input: 'input wire [3:0] a, b',
+        description_output: 'output wire [3:0] sum\noutput wire cout',
+        level: 'medium',
+        tags: 'combinational,arithmetic',
+        template_code: 'module adder_4bit(\n    input wire [3:0] a,\n    input wire [3:0] b,\n    output wire [3:0] sum,\n    output wire cout\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: '0+0', input: 'a=0000,b=0000', expected_output: 'sum=0000,cout=0', grade: 5, order_index: 0 },
+          { name: '3+4', input: 'a=0011,b=0100', expected_output: 'sum=0111,cout=0', grade: 5, order_index: 1 },
+          { name: '15+1', input: 'a=1111,b=0001', expected_output: 'sum=0000,cout=1', grade: 10, order_index: 2 },
+          { name: '7+8', input: 'a=0111,b=1000', expected_output: 'sum=1111,cout=0', grade: 10, order_index: 3 },
+        ],
+      },
+      {
+        key: 'dff',
+        name: 'D Flip-Flop',
+        description: 'Thiết kế D Flip-Flop cơ bản với clock và reset.\n\nModule lưu giá trị đầu vào D vào thanh ghi khi có cạnh lên clock. Reset đồng bộ đưa đầu ra Q về 0.',
+        description_input: 'input wire clk, rst, d',
+        description_output: 'output reg q',
+        level: 'medium',
+        tags: 'sequential,flip-flop',
+        template_code: 'module dff(\n    input wire clk,\n    input wire rst,\n    input wire d,\n    output reg q\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Reset', input: 'clk=1,rst=1,d=1', expected_output: 'q=0', grade: 10, order_index: 0 },
+          { name: 'Load 1', input: 'clk=1,rst=0,d=1', expected_output: 'q=1', grade: 10, order_index: 1 },
+          { name: 'Load 0', input: 'clk=1,rst=0,d=0', expected_output: 'q=0', grade: 10, order_index: 2 },
+        ],
+      },
+      {
+        key: 'fsm_traffic',
+        name: 'FSM Traffic Light',
+        description: 'Thiết kế bộ điều khiển đèn giao thông bằng máy trạng thái hữu hạn (FSM).\n\nModule có 3 trạng thái: GREEN (00), YELLOW (01), RED (10). Chuyển trạng thái theo chu kỳ clock.',
+        description_input: 'input wire clk, rst',
+        description_output: 'output reg [1:0] light',
+        level: 'hard',
+        tags: 'sequential,fsm',
+        template_code: 'module fsm_traffic_light(\n    input wire clk,\n    input wire rst,\n    output reg [1:0] light\n);\n    // States: GREEN=00, YELLOW=01, RED=10\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Reset to GREEN', input: 'clk=1,rst=1', expected_output: 'light=00', grade: 10, order_index: 0 },
+          { name: 'GREEN->YELLOW', input: 'clk=1,rst=0', expected_output: 'light=01', grade: 15, order_index: 1 },
+          { name: 'YELLOW->RED', input: 'clk=1,rst=0', expected_output: 'light=10', grade: 15, order_index: 2 },
+        ],
+      },
+    ];
+
+    for (const def of verilogProblemDefs) {
+      const exists = await VerilogProblem.findOne({ where: { name: def.name } });
+      if (exists) {
+        logger.info(`Verilog problem "${def.name}" already exists — skipping`);
+        continue;
+      }
+      const problem = await VerilogProblem.create({
+        name: def.name,
+        description: def.description,
+        description_input: def.description_input,
+        description_output: def.description_output,
+        level: def.level,
+        tags: def.tags,
+        template_code: def.template_code,
+        testbench_type: 'auto_generated',
+        owner_id: users.truong_lab.id,
+        is_published: true,
+      });
+      for (const tc of def.testcases) {
+        await VerilogTestCase.create({
+          problem_id: problem.id,
+          name: tc.name,
+          type: 'SIM',
+          grade: tc.grade,
+          input: tc.input,
+          expected_output: tc.expected_output,
+          time_limit: 60,
+          mem_limit: 128,
+          order_index: tc.order_index,
+        });
+      }
+      logger.info(`Created verilog problem: ${def.name} with ${def.testcases.length} test cases`);
+    }
+    logger.info('Seeded verilog problems');
 
     logger.info('✅  Seeding complete');
     logger.info('');

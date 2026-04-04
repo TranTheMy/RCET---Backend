@@ -8,6 +8,11 @@ const Task = require('./Task');
 const Milestone = require('./Milestone');
 const MilestoneTask = require('./MilestoneTask');
 const WeeklyReport = require('./WeeklyReport');
+const VerilogProblem = require('./VerilogProblem');
+const VerilogTestCase = require('./VerilogTestCase');
+const VerilogSubmission = require('./VerilogSubmission');
+const VerilogSubmissionResult = require('./VerilogSubmissionResult');
+const Notification = require('./Notification');
 
 // ======== User & Approval Associations ========
 User.hasMany(ApprovalRequest, { foreignKey: 'user_id', as: 'approvalRequests' });
@@ -50,6 +55,29 @@ WeeklyReport.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 WeeklyReport.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(WeeklyReport, { foreignKey: 'user_id', as: 'weeklyReports' });
 
+// ======== Verilog OJ Associations ========
+VerilogProblem.belongsTo(User, { foreignKey: 'owner_id', as: 'owner' });
+User.hasMany(VerilogProblem, { foreignKey: 'owner_id', as: 'verilogProblems' });
+
+VerilogProblem.hasMany(VerilogTestCase, { foreignKey: 'problem_id', as: 'testcases', onDelete: 'CASCADE', hooks: true });
+VerilogTestCase.belongsTo(VerilogProblem, { foreignKey: 'problem_id', as: 'problem' });
+
+VerilogProblem.hasMany(VerilogSubmission, { foreignKey: 'problem_id', as: 'submissions', onDelete: 'CASCADE', hooks: true });
+VerilogSubmission.belongsTo(VerilogProblem, { foreignKey: 'problem_id', as: 'problem' });
+
+VerilogSubmission.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(VerilogSubmission, { foreignKey: 'user_id', as: 'verilogSubmissions' });
+
+VerilogSubmission.hasMany(VerilogSubmissionResult, { foreignKey: 'submission_id', as: 'results', onDelete: 'CASCADE', hooks: true });
+VerilogSubmissionResult.belongsTo(VerilogSubmission, { foreignKey: 'submission_id', as: 'submission' });
+
+VerilogSubmissionResult.belongsTo(VerilogTestCase, { foreignKey: 'testcase_id', as: 'testcase' });
+VerilogTestCase.hasMany(VerilogSubmissionResult, { foreignKey: 'testcase_id', as: 'results', onDelete: 'SET NULL' });
+
+// ======== Notification Associations ========
+User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
+Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -61,4 +89,9 @@ module.exports = {
   Milestone,
   MilestoneTask,
   WeeklyReport,
+  VerilogProblem,
+  VerilogTestCase,
+  VerilogSubmission,
+  VerilogSubmissionResult,
+  Notification,
 };
