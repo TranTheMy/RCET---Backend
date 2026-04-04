@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCET Portal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-gray-800 min-h-screen">
+
+    <div id="loginScreen" class="flex items-center justify-center min-h-screen">
+        <div class="bg-white p-8 rounded-xl shadow-lg max-w-md w-full border-t-4 border-indigo-600">
+            <h2 class="text-2xl font-bold text-center mb-6 text-gray-800">Đăng Nhập Hệ Thống</h2>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="mb-4">
+                    <label class="block text-sm font-semibold text-gray-600 mb-1">Email</label>
+                    <input type="email" id="email" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required placeholder="admin@rcet.vn">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-semibold text-gray-600 mb-1">Mật khẩu</label>
+                    <input type="password" id="password" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required placeholder="••••••••">
+                </div>
+                <button type="submit" id="loginBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded transition">
+                    Đăng Nhập
+                </button>
+                <div id="loginError" class="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded text-center font-medium hidden"></div>
+            </form>
+        </div>
+    </div>
+
+    <div id="projectScreen" class="max-w-5xl mx-auto p-8 hidden">
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Dự Án Đã Hoàn Thành</h1>
+                <p class="text-gray-500 mt-1">Chọn một dự án để xem hoặc chốt bảng tính thưởng</p>
+            </div>
+            <button onclick="logout()" class="bg-red-50 hover:bg-red-100 text-red-600 px-4 py-2 rounded font-semibold border border-red-200 transition shadow-sm">
+                Đăng Xuất
+            </button>
+        </div>
+
+        <div id="projectList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            </div>
+    </div>
+
+    <script>
+        const AUTH_API_URL = 'http://localhost:3000/api/auth/login'; // API Đăng nhập
+        const PROJECT_API_URL = 'http://localhost:3000/api/projects?status=done'; // API lấy dự án done
+
+        // ==========================================
+        // 1. TỰ ĐỘNG KIỂM TRA ĐĂNG NHẬP
+        // ==========================================
+        window.onload = () => {
+            const token = localStorage.getItem('rcet_token');
+            // Nếu token là chuỗi 'undefined' (lỗi do bản cũ), tự động xóa đi
+            if (token === 'undefined' || token === 'null') {
+                localStorage.removeItem('rcet_token');
+            } else if (token) {
+                showProjectScreen();
+            }
+        };
+
+        // ==========================================
+        // 2. XỬ LÝ ĐĂNG NHẬP
+        // ==========================================
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('loginBtn');
+            const errorDiv = document.getElementById('loginError');
+
+            btn.textContent = 'Đang xác thực...';
+            errorDiv.classList.add('hidden');
+
+            try {
+                const res = await fetch(AUTH_API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const json = await res.json();
+
+                if (!res.ok) throw new Error(json.message || 'Tài khoản hoặc mật khẩu không chính xác.');
+
+                // 🛡️ BỘ QUÉT TOKEN THÔNG MINH
+                // Quét qua mọi định dạng JSON phổ biến mà BE có thể trả về
+                const token = json.data?.access_token || json.data?.accessToken || json.data?.token || json.access_token || json.token;
+                
+                if (!token) {
+                    throw new Error("Đăng nhập thành công nhưng Frontend không tìm thấy Token trong dữ liệu trả về.");
+                }
+
+                // Lưu token an toàn vào trình duyệt
+                localStorage.setItem('rcet_token', token);
+                
+                // Chuyển màn hình
+                showProjectScreen();
+            } catch (err) {
+                errorDiv.textContent = err.message;
+                errorDiv.classList.remove('hidden');
+            } finally {
+                btn.textContent = 'Đăng Nhập';
+            }
+        }
+
+        // ==========================================
+        // 3. HIỂN THỊ DANH SÁCH DỰ ÁN
+        // ==========================================
+        async function showProjectScreen() {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('projectScreen').classList.remove('hidden');
+            
+            const token = localStorage.getItem('rcet_token');
+            const listDiv = document.getElementById('projectList');
+            listDiv.innerHTML = '<p class="text-gray-500 col-span-full font-medium">Đang tải dữ liệu từ máy chủ...</p>';
+
+            try {
+                const res = await fetch(PROJECT_API_URL, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const json = await res.json();
+                
+                // Bắt lỗi 401 Unauthorized nếu token hết hạn
+                if (res.status === 401) {
+                    alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
+                    logout();
+                    return;
+                }
+                
+                if (!res.ok) throw new Error(json.message || "Lỗi khi lấy danh sách dự án.");
+
+                // Lấy mảng dự án từ dữ liệu trả về
+                const projects = json.data?.projects || json.data || [];
+                
+                if (projects.length === 0) {
+                    listDiv.innerHTML = `
+                        <div class="col-span-full bg-white p-8 text-center rounded-xl border border-dashed border-gray-300">
+                            <p class="text-gray-500 font-medium mb-2">Chưa có dự án nào chuyển sang trạng thái HOÀN THÀNH (done).</p>
+                        </div>`;
+                    return;
+                }
+
+                // Render giao diện card cho từng dự án
+                listDiv.innerHTML = projects.map(p => `
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group">
+                        <div class="flex justify-between items-start mb-3">
+                            <span class="bg-green-100 text-green-700 text-xs font-bold px-2 py-1 rounded">DONE</span>
+                            <span class="text-xs text-gray-400 font-mono" title="Project Code">${p.code || 'N/A'}</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-gray-800 mb-2 truncate" title="${p.name}">${p.name}</h3>
+                        <p class="text-sm text-gray-500 mb-5">Ngân sách: <span class="font-semibold text-indigo-700">${Number(p.budget || 0).toLocaleString('vi-VN')} đ</span></p>
+                        
+                        <a href="reward_dashboard.html?projectId=${p.id}" class="block text-center bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 font-semibold py-2 rounded transition border border-indigo-100">
+                            📊 Xem Bảng Lương
+                        </a>
+                    </div>
+                `).join('');
+
+            } catch (err) {
+                listDiv.innerHTML = `<p class="text-red-500 col-span-full bg-red-50 p-4 rounded border border-red-200">Lỗi tải dự án: ${err.message}</p>`;
+            }
+        }
+
+        // ==========================================
+        // 4. XỬ LÝ ĐĂNG XUẤT
+        // ==========================================
+        function logout() {
+            localStorage.removeItem('rcet_token');
+            window.location.reload(); // Tải lại trang để reset toàn bộ state
+        }
+    </script>
+</body>
+</html>

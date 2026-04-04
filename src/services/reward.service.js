@@ -1,0 +1,402 @@
+const { Op } = require('sequelize');
+const { v4: uuidv4 } = require('uuid'); // Bổ sung thư viện tạo UUID
+const {
+  sequelize,
+  Project,
+  ProjectMember,
+  Task,
+  WeeklyReport,
+  Commitment,
+  RewardSheet,
+  RewardSheetDetail,
+  User,
+} = require('../models');
+const { SYSTEM_ROLES } = require('../config/constants');
+const logger = require('../utils/logger');
+
+// --- CẤU HÌNH TỶ LỆ CHIA THƯỞNG ---
+const MODEL_CONFIG = {
+  1: { student_pct: 0.30, teacher_pct: 0.70 }, 
+  2: { student_pct: 0.40, teacher_pct: 0.60 }, 
+  3: { student_pct: 0.50, teacher_pct: 0.50 }, 
+};
+
+const GRADE_MULTIPLIER = {
+  'A': 1.0, 
+  'B': 0.8, 
+  'C': 0.5, 
+};
+
+const TASK_PENALTY_RATE = 0.05; 
+
+/**
+ * 1. HÀM CORE: TỰ ĐỘNG TÍNH TOÁN
+ */
+/**
+ * 1. HÀM CORE: TỰ ĐỘNG TÍNH TOÁN (ĐÃ VÁ LỖI BACKUP OVERRIDE)
+ */
+const autoGenerateProjectReward = async (projectId, generatedBy) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const project = await Project.findByPk(projectId, {
+      include: [{ model: ProjectMember, as: 'members' }],
+      transaction
+    });
+
+    if (!project) throw { status: 404, message: 'Không tìm thấy dự án.' };
+    if (project.status !== 'done') throw { status: 400, message: 'Chỉ tính thưởng khi dự án đã hoàn thành (done).' };
+
+    const members = project.members || [];
+    if (members.length === 0) throw { status: 400, message: 'Dự án không có thành viên nào để chia thưởng.' };
+
+    // FIX 1: Ép kiểu an toàn, tránh lỗi NOT NULL khi chèn vào MSSQL
+    const safeBudget = Number(project.budget) || 0;
+    const baseShare = safeBudget / members.length;
+
+    // 🛡️ CHUẨN BỊ BỘ NHỚ ĐỆM ĐỂ BACKUP DỮ LIỆU SỬA TAY
+    const overrideCache = {}; 
+
+    let sheet = await RewardSheet.findOne({ where: { project_id: projectId }, transaction });
+    if (sheet) {
+      if (sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng tính này đã chốt, không thể tính lại.' };
+      
+      // 🛡️ SAO LƯU DỮ LIỆU SỬA TAY CỦA VIỆN TRƯỞNG TRƯỚC KHI XÓA
+      const oldDetails = await RewardSheetDetail.findAll({ where: { sheet_id: sheet.id }, transaction });
+      oldDetails.forEach(d => {
+        if (d.is_overridden) {
+          overrideCache[d.user_id] = d.final_override_amount;
+        }
+      });
+
+      await RewardSheetDetail.destroy({ where: { sheet_id: sheet.id }, transaction });
+    } else {
+      // FIX 2: Tự sinh ID để MSSQL không bị lỗi khi mapping kết quả trả về
+      sheet = await RewardSheet.create({
+        id: uuidv4(),
+        project_id: projectId,
+        total_budget: safeBudget, 
+        generated_by: generatedBy,
+        status: 'DRAFT'
+      }, { transaction });
+    }
+
+    const rewardDetails = [];
+    const partyAAggregator = {}; 
+
+    for (const member of members) {
+      const userId = member.user_id;
+
+      const commitment = await Commitment.findOne({
+        where: { user_id: userId },
+        order: [['created_at', 'DESC']],
+        transaction
+      });
+
+      let modelType = null;
+      let studentCutPct = 1.0; 
+
+      if (commitment && MODEL_CONFIG[commitment.model_type]) {
+        modelType = commitment.model_type;
+        studentCutPct = MODEL_CONFIG[modelType].student_pct;
+
+        const teacherEmail = commitment.party_a_email;
+        if (teacherEmail) {
+          if (!partyAAggregator[teacherEmail]) {
+            partyAAggregator[teacherEmail] = { total_cut: 0, from_students: [] };
+          }
+          const teacherCut = baseShare * MODEL_CONFIG[modelType].teacher_pct;
+          partyAAggregator[teacherEmail].total_cut += teacherCut;
+          partyAAggregator[teacherEmail].from_students.push({
+            name: commitment.party_b_name || 'Thành viên',
+            amount: teacherCut
+          });
+        }
+      }
+
+      const modelCutAmount = baseShare * studentCutPct;
+
+      const reports = await WeeklyReport.findAll({ 
+        where: { project_id: projectId, user_id: userId },
+        transaction
+      });
+      const lateReports = reports.filter(r => r.status === 'LATE' || new Date(r.submitted_at) > new Date(r.due_date));
+      
+      let reportGrade = 'A';
+      if (lateReports.length === 1) reportGrade = 'B';
+      else if (lateReports.length >= 2) reportGrade = 'C';
+      
+      const gradeMultiplier = GRADE_MULTIPLIER[reportGrade];
+      const amountAfterGrade = modelCutAmount * gradeMultiplier;
+
+      const tasks = await Task.findAll({ 
+        where: { project_id: projectId, assignee_id: userId },
+        transaction
+      });
+      const lateTasks = tasks.filter(t => 
+        (t.status !== 'done' && new Date() > new Date(t.due_date)) || 
+        (t.status === 'done' && new Date(t.updated_at) > new Date(t.due_date))
+      );
+
+      const penaltyMultiplier = lateTasks.length * TASK_PENALTY_RATE; 
+      const penaltyAmount = amountAfterGrade * penaltyMultiplier;
+      
+      let calculatedAmount = amountAfterGrade - penaltyAmount;
+      if (calculatedAmount < 0) calculatedAmount = 0; 
+
+      const penaltyMetadata = JSON.stringify({
+        late_reports: lateReports.map(r => ({ week: r.week_number, due: r.due_date })),
+        late_tasks: lateTasks.map(t => ({ id: t.id, title: t.title, due: t.due_date }))
+      });
+
+      // 🛡️ LẤY LẠI DỮ LIỆU ĐÃ SAO LƯU TỪ CACHE
+      const cachedOverride = overrideCache[userId];
+
+      rewardDetails.push({
+        id: uuidv4(), // Cấp sẵn ID
+        sheet_id: sheet.id,
+        user_id: userId,
+        role: member.role, 
+        model_type: modelType,
+        base_share: Math.round(baseShare),
+        model_cut_amount: Math.round(modelCutAmount),
+        report_grade: reportGrade,
+        grade_multiplier: gradeMultiplier,
+        late_task_count: lateTasks.length,
+        penalty_amount: Math.round(penaltyAmount),
+        calculated_amount: Math.round(calculatedAmount),
+        final_override_amount: cachedOverride !== undefined ? cachedOverride : null, // 🛡️ Phục hồi dữ liệu
+        is_overridden: cachedOverride !== undefined, // 🛡️ Phục hồi dữ liệu
+        penalty_metadata: penaltyMetadata
+        
+      });
+    }
+
+    // 🛡️ XỬ LÝ LƯƠNG CHO TRƯỞNG LAB
+    for (const [email, data] of Object.entries(partyAAggregator)) {
+      const teacher = await User.findOne({ where: { email }, transaction });
+      if (teacher) {
+        
+        // 🛡️ LẤY LẠI DỮ LIỆU ĐÃ SAO LƯU TỪ CACHE (Cho Trưởng Lab)
+        const cachedOverrideTeacher = overrideCache[teacher.id];
+
+        rewardDetails.push({
+          id: uuidv4(), // Cấp sẵn ID
+          sheet_id: sheet.id,
+          user_id: teacher.id,
+          role: 'Truong Lab', 
+          model_type: null, 
+          base_share: 0,
+          model_cut_amount: Math.round(data.total_cut),
+          report_grade: 'A', 
+          grade_multiplier: 1.0,
+          late_task_count: 0,
+          penalty_amount: 0,
+          calculated_amount: Math.round(data.total_cut), 
+          final_override_amount: cachedOverrideTeacher !== undefined ? cachedOverrideTeacher : null, // 🛡️ Phục hồi
+          is_overridden: cachedOverrideTeacher !== undefined, // 🛡️ Phục hồi
+          penalty_metadata: JSON.stringify({
+            info: 'Thu nhập trích từ % cam kết của các sinh viên trong dự án',
+            sources: data.from_students
+          })
+        });
+      }
+    }
+
+    await RewardSheetDetail.bulkCreate(rewardDetails, { transaction });
+    await transaction.commit();
+    logger.info(`Đã tự động tính thưởng cho dự án ${projectId}.`);
+
+    return sheet;
+  } catch (error) {
+    // FIX 3: Bọc try-catch riêng để bắt rollback error, giữ lại lỗi gốc
+    try {
+      if (transaction) await transaction.rollback();
+    } catch (rollbackError) {
+      logger.warn('Transaction aborted by SQL Server.');
+    }
+    logger.error('Lỗi khi tính thưởng dự án:', error);
+    throw error;
+  }
+};
+
+/**
+ * 2. LẤY CHI TIẾT BẢNG THƯỞNG THEO PHÂN QUYỀN
+ */
+const getRewardSheetByProject = async (projectId, requestingUser) => {
+  const sheet = await RewardSheet.findOne({
+    where: { project_id: projectId },
+    include: [{
+      model: RewardSheetDetail,
+      as: 'details',
+      include: [{ model: User, as: 'user', attributes: ['full_name', 'email', 'system_role'] }]
+    }]
+  });
+
+  if (!sheet) throw { status: 404, message: 'Bảng tính thưởng dự án này chưa được tạo.' };
+
+  // 🛡️ BƯỚC 1: Chuyển object của DB thành JSON thuần (bóc tách khỏi Sequelize)
+  const sheetData = sheet.toJSON();
+
+  // 🛡️ BƯỚC 2: Cắt tỉa dữ liệu theo phân quyền
+  if (requestingUser.system_role !== 'vien_truong') {
+    // Chỉ giữ lại mảng details có user_id trùng với ID người đang đăng nhập
+    sheetData.details = sheetData.details.filter(detail => detail.user_id === requestingUser.id);
+  }
+
+  // Trả về sheetData (đã bị cắt gọt) thay vì sheet gốc
+  return sheetData;
+};
+
+/**
+ * 3. VIỆN TRƯỞNG CHỈNH SỬA TIỀN THỦ CÔNG
+ */
+const updateRewardOverride = async (detailId, overrideAmount, requestingUser) => {
+  if (requestingUser.system_role !== 'vien_truong') {
+    throw { status: 403, message: 'Chỉ Viện Trưởng mới có quyền chỉnh sửa số tiền.' };
+  }
+
+  const detail = await RewardSheetDetail.findByPk(detailId, {
+    include: [{ model: RewardSheet, as: 'sheet' }]
+  });
+
+  if (!detail) throw { status: 404, message: 'Không tìm thấy chi tiết thưởng.' };
+  if (detail.sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng tính đã chốt, không thể chỉnh sửa.' };
+
+  detail.final_override_amount = overrideAmount;
+  detail.is_overridden = overrideAmount !== null && overrideAmount !== undefined;
+  await detail.save();
+
+  return detail;
+};
+
+/**
+ * 4. VIỆN TRƯỞNG CHỐT SỔ BẢNG THƯỞNG (FINAL VERSION)
+ */
+const finalizeRewardSheet = async (projectId, requestingUser) => {
+  if (requestingUser.system_role !== 'vien_truong') {
+    throw { status: 403, message: 'Chỉ Viện Trưởng mới có quyền chốt sổ (Finalize).' };
+  }
+
+  // Phải include cả bảng details để lấy dữ liệu tính tổng tiền và check khiếu nại
+  const sheet = await RewardSheet.findOne({ 
+    where: { project_id: projectId },
+    include: [{ model: RewardSheetDetail, as: 'details' }] 
+  });
+
+  if (!sheet) throw { status: 404, message: 'Không tìm thấy bảng tính thưởng.' };
+  if (sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng này đã được chốt từ trước.' };
+
+  // ==========================================
+  // 🛡️ CHỐT CHẶN 1: KIỂM TRA KHIẾU NẠI TỒN ĐỌNG
+  // ==========================================
+  const pendingAppeals = sheet.details.filter(d => d.appeal_status === 'PENDING');
+  if (pendingAppeals.length > 0) {
+    throw { 
+      status: 400, 
+      message: `Không thể chốt sổ! Đang có ${pendingAppeals.length} khiếu nại chưa được giải quyết. Vui lòng xử lý khiếu nại trước khi Finalize.` 
+    };
+  }
+  // ==========================================
+
+  // ==========================================
+  // 🛡️ CHỐT CHẶN 2: KIỂM TRA NGÂN SÁCH (ĐÃ LÀM TRÒN SỐ CHỐNG LỖI)
+  // ==========================================
+  let totalActualPayout = 0;
+
+  for (const detail of sheet.details) {
+    // Nếu có sửa tay, lấy tiền sửa tay. Nếu không, lấy tiền tính tự động.
+    const payoutForUser = detail.is_overridden 
+        ? Number(detail.final_override_amount) 
+        : Number(detail.calculated_amount);
+        
+    totalActualPayout += payoutForUser;
+  }
+
+  const projectBudget = Number(sheet.total_budget);
+  
+  // Làm tròn tới số nguyên để tránh lỗi thập phân của JS (VD: 0.00001)
+  const safeTotalPayout = Math.round(totalActualPayout);
+  const safeProjectBudget = Math.round(projectBudget);
+
+  // Nếu tổng chi thực tế LỚN HƠN ngân sách dự án -> CHẶN
+  if (safeTotalPayout > safeProjectBudget) {
+    const formatter = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' });
+    throw { 
+      status: 400, 
+      message: `Không thể chốt sổ! Tổng tiền chi trả (${formatter.format(safeTotalPayout)}) đang VƯỢT QUÁ ngân sách dự án (${formatter.format(safeProjectBudget)}). Vui lòng điều chỉnh lại.` 
+    };
+  }
+  // ==========================================
+
+  sheet.status = 'FINALIZED';
+  sheet.finalized_by = requestingUser.id;
+  sheet.finalized_at = new Date();
+  await sheet.save();
+
+  // Trả về thêm object summary để Frontend hiển thị báo cáo tổng quan
+  return {
+    ...sheet.toJSON(),
+    summary: {
+      total_budget: safeProjectBudget,
+      total_payout: safeTotalPayout,
+      budget_saved: safeProjectBudget - safeTotalPayout // Tiền giữ lại cho quỹ Viện
+    }
+  };
+};
+/**
+ * 5. THÀNH VIÊN GỬI KHIẾU NẠI (APPEAL)
+ */
+const submitAppeal = async (detailId, reason, requestingUser) => {
+  const detail = await RewardSheetDetail.findOne({
+    where: { id: detailId, user_id: requestingUser.id },
+    include: [{ model: RewardSheet, as: 'sheet' }]
+  });
+
+  if (!detail) throw { status: 404, message: 'Không tìm thấy dữ liệu thưởng của bạn.' };
+  if (detail.sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng tính đã chốt, không thể khiếu nại nữa.' };
+
+  detail.appeal_status = 'PENDING';
+  detail.appeal_reason = reason;
+  await detail.save();
+
+  return detail;
+};
+/**
+ * 6. VIỆN TRƯỞNG GIẢI QUYẾT KHIẾU NẠI (RESOLVE/REJECT)
+ */
+const resolveAppeal = async (detailId, resolutionStatus, requestingUser) => {
+  if (requestingUser.system_role !== 'vien_truong') {
+    throw { status: 403, message: 'Chỉ Viện Trưởng mới có quyền giải quyết khiếu nại.' };
+  }
+
+  // resolutionStatus chỉ được nhận 'RESOLVED' hoặc 'REJECTED'
+  if (!['RESOLVED', 'REJECTED'].includes(resolutionStatus)) {
+      throw { status: 400, message: 'Trạng thái giải quyết không hợp lệ.' };
+  }
+
+  const detail = await RewardSheetDetail.findByPk(detailId, {
+    include: [{ model: RewardSheet, as: 'sheet' }]
+  });
+
+  if (!detail) throw { status: 404, message: 'Không tìm thấy chi tiết thưởng.' };
+  if (detail.appeal_status !== 'PENDING') throw { status: 400, message: 'Mục này không có khiếu nại nào đang chờ xử lý.' };
+  if (detail.sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng tính đã chốt.' };
+
+  detail.appeal_status = resolutionStatus;
+  await detail.save();
+
+  // (Mẹo: Thường Viện trưởng sẽ gọi API UpdateOverrideAmount trước để sửa tiền, sau đó gọi API ResolveAppeal này để đóng khiếu nại).
+  return detail;
+};
+
+// Đừng quên export hàm này ở module.exports cuối file nhé!
+
+module.exports = {
+  autoGenerateProjectReward,
+  getRewardSheetByProject,
+  updateRewardOverride,
+  finalizeRewardSheet,
+  submitAppeal,
+  resolveAppeal,
+};

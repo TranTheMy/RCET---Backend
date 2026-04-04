@@ -8,6 +8,7 @@ const {
   SYSTEM_ROLES, TASK_STATUS, AUDIT_ACTIONS,
 } = require('../config/constants');
 const auditService = require('./audit.service');
+const rewardService = require('./reward.service');
 
 // =====================================================
 // Helpers
@@ -256,12 +257,55 @@ const updateProject = async (projectId, data, user) => {
     }
   }
 
+  // 🛡️ CHỐT CHẶN: Khóa ngân sách nếu dự án đã done
+  if (project.status === 'done' && data.budget && Number(data.budget) !== Number(project.budget)) {
+    throw { status: 400, message: 'Dữ liệu đã khóa! Không thể thay đổi Ngân sách khi dự án đã Hoàn thành.' };
+  }
+
+  // =========================================================
+  // 🛡️ CHỐT CHẶN: KHÔNG CHO RỜI KHỎI TRẠNG THÁI 'DONE' NẾU LƯƠNG ĐÃ CHỐT
+  // =========================================================
+  if (project.status === 'done' && data.status && data.status !== 'done') {
+    // Import RewardSheet từ models (nếu chưa có ở đầu file)
+    const { RewardSheet } = require('../models');
+    
+    const existingSheet = await RewardSheet.findOne({ where: { project_id: projectId } });
+    if (existingSheet && existingSheet.status === 'FINALIZED') {
+      throw { 
+        status: 400, 
+        message: 'Không thể mở lại dự án này! Bảng tính thưởng của dự án đã được Viện trưởng CHỐT SỔ (Finalized). Bất kỳ thay đổi nào cũng sẽ gây sai lệch tài chính.' 
+      };
+    }
+  }
+  // =========================================================
+
+  // 🛡️ LƯU LẠI TRẠNG THÁI CŨ TRƯỚC KHI UPDATE ĐỂ TRÁNH SPAM TRIGGER
+  const oldStatus = project.status;
+
+  // Gọi update và log duy nhất 1 lần
   await project.update(data);
 
   await auditService.log(AUDIT_ACTIONS.PROJECT_UPDATED, user.id, null, {
     project_id: projectId,
     changes: data,
   });
+
+  // =========================================================
+  // 🎯 CÒ SÚNG: CHỈ KÍCH HOẠT KHI THỰC SỰ CHUYỂN TỪ TRẠNG THÁI KHÁC SANG 'DONE'
+  // =========================================================
+  if (data.status === 'done' && oldStatus !== 'done') { 
+    try {
+      console.log(`[AUTO-REWARD] Phát hiện dự án ${projectId} vừa chuyển sang Hoàn thành. Đang kích hoạt tính thưởng...`);
+      // Gọi service tính thưởng. Nó tự quản lý transaction độc lập của nó.
+      await rewardService.autoGenerateProjectReward(projectId, user.id);
+      console.log(`[AUTO-REWARD] Đã tạo bảng tính thưởng nháp cho dự án ${projectId} thành công.`);
+    } catch (err) {
+      // Bọc try-catch và KHÔNG throw error ở đây. 
+      // Đảm bảo việc tính thưởng lỗi cũng không làm fail việc cập nhật trạng thái Project ở trên.
+      console.error(`[AUTO-REWARD ERROR] Lỗi khi tự động tính thưởng:`, err.message);
+    }
+  }
+  // =========================================================
 
   return project;
 };
@@ -391,6 +435,13 @@ const updateTask = async (projectId, taskId, data, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw { status: 404, message: 'Project not found' };
 
+  if (project.status === 'done') {
+    throw { 
+      status: 400, 
+      message: 'Không thể thay đổi Task/Report! Dự án đã hoàn thành, mọi dữ liệu hiệu suất đã được ĐÓNG BĂNG để phục vụ tính lương.' 
+    };
+  }
+
   const task = await Task.findOne({ where: { id: taskId, project_id: projectId } });
   if (!task) throw { status: 404, message: 'Task not found' };
 
@@ -485,6 +536,10 @@ const addMember = async (projectId, data, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw { status: 404, message: 'Project not found' };
 
+  if (project.status === 'done') {
+    throw { status: 400, message: 'Dữ liệu đã khóa! Không thể thêm/xóa thành viên khi dự án đã Hoàn thành.' };
+  }
+
   const accessLevel = checkProjectAccess(user.system_role, project.leader_id, user.id);
   if (accessLevel === 'member') {
     throw { status: 403, message: 'You do not have permission to add members' };
@@ -521,6 +576,10 @@ const addMember = async (projectId, data, user) => {
 const removeMember = async (projectId, memberId, user) => {
   const project = await Project.findByPk(projectId);
   if (!project) throw { status: 404, message: 'Project not found' };
+
+  if (project.status === 'done') {
+    throw { status: 400, message: 'Dữ liệu đã khóa! Không thể thêm/xóa thành viên khi dự án đã Hoàn thành.' };
+  }
 
   const accessLevel = checkProjectAccess(user.system_role, project.leader_id, user.id);
   if (accessLevel === 'member') {
@@ -752,6 +811,13 @@ const createReport = async (projectId, data, user) => {
   const membership = await isProjectMember(projectId, user.id);
   const project = await Project.findByPk(projectId);
   if (!project) throw { status: 404, message: 'Project not found' };
+
+  if (project.status === 'done') {
+    throw { 
+      status: 400, 
+      message: 'Không thể thay đổi Task/Report! Dự án đã hoàn thành, mọi dữ liệu hiệu suất đã được ĐÓNG BĂNG để phục vụ tính lương.' 
+    };
+  }
 
   if (!membership && project.leader_id !== user.id) {
     throw { status: 403, message: 'You are not a member of this project' };

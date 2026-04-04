@@ -1,11 +1,12 @@
 const bcrypt = require('bcryptjs');
 const {
-  sequelize, User, Project, ProjectMember, Task, Milestone, WeeklyReport,
+  sequelize, User, Project, ProjectMember, Task, Milestone, WeeklyReport, Commitment,
 } = require('../models');
 const {
   USER_STATUS, SYSTEM_ROLES, PROJECT_STATUS, PROJECT_ROLES,
   TASK_STATUS, TASK_PRIORITY, REPORT_STATUS,
 } = require('../config/constants');
+const { generateRewardSheet } = require('../services/reward.service');
 const logger = require('../utils/logger');
 
 const SALT_ROUNDS = 10;
@@ -141,6 +142,9 @@ const seed = async () => {
     logger.info('Database connected for seeding');
     await sequelize.sync();
 
+    // Ensure commitment_location exists for backward compatibility
+    await sequelize.query("IF COL_LENGTH('Commitments','commitment_location') IS NULL BEGIN ALTER TABLE Commitments ADD commitment_location NVARCHAR(255) NULL END");
+
     // ── 1. Users ──────────────────────────────────────────────────────────────
     const users = {};
     for (const def of USER_DEFS) {
@@ -274,6 +278,64 @@ const seed = async () => {
         });
       }
     }
+
+    // ── 2.5. Commitments (sample data) ─────────────────────────────────────────
+    const commitmentDefs = [
+      {
+        userKey: 'member1',
+        partyA_email: users.truong_lab.email, // Corrected email
+        modelType: 1,
+        partyA_name: 'Trần Thị Lab',
+        partyB_name: 'Hoàng Văn An',
+        partyB_mssv: users.member1.student_code,
+      },
+      {
+        userKey: 'member2',
+        partyA_email: users.truong_lab.email, // Corrected email
+        modelType: 2,
+        partyA_name: 'Trần Thị Lab',
+        partyB_name: 'Nguyễn Hải Yến',
+        partyB_mssv: users.member2.student_code,
+      },
+      {
+        userKey: 'leader1',
+        partyA_email: users.vien_truong.email, // Corrected email
+        modelType: 3,
+        partyA_name: 'Nguyễn Văn Viện',
+        partyB_name: 'Lê Minh Khoa',
+        partyB_mssv: users.leader1.student_code,
+      },
+    ];
+
+    for (const def of commitmentDefs) {
+      const user = users[def.userKey];
+      if (!user) continue;
+
+      const [commitment, created] = await Commitment.findOrCreate({
+        where: { user_id: user.id, model_type: def.modelType },
+        defaults: {
+          user_id: user.id,
+          party_a_email: def.partyA_email,
+          model_type: def.modelType,
+          party_a_name: def.partyA_name,
+          party_b_name: def.partyB_name,
+          party_b_mssv: def.partyB_mssv,
+          created_at: new Date(),
+        },
+      });
+
+      if (created) {
+        logger.info(`Created commitment for ${def.partyB_name}`);
+      } else {
+        // Ensure existing records have the correct email
+        if (commitment.party_a_email !== def.partyA_email) {
+          commitment.party_a_email = def.partyA_email;
+          await commitment.save();
+          logger.info(`Updated commitment for ${def.partyB_name}`);
+        }
+      }
+    }
+    logger.info('Seeded and corrected commitments.');
 
     // ── 3. Tasks ──────────────────────────────────────────────────────────────
     const taskDefs = [
@@ -474,73 +536,133 @@ const seed = async () => {
     }
     logger.info('Seeded milestones');
 
-    // ── 5. Weekly Reports ─────────────────────────────────────────────────────
-    // Generate 8 weeks of reports for active projects
-    const activeProjects = [
-      { pKey: 'roboarm', memberKeys: ['leader1', 'member1', 'member2', 'member3'] },
-      { pKey: 'aivision', memberKeys: ['leader2', 'member2', 'member4'] },
-    ];
+    // ── 5. Weekly Reports & Reward Module Test Data (March 2024) ──────────────
+    logger.info('Seeding data for Reward Module test cases...');
 
-    const now = new Date();
-    const currentWeek = isoWeek(now);
-    const currentYear = now.getFullYear();
-
-    for (const { pKey, memberKeys } of activeProjects) {
-      const project = projects[pKey];
-      if (!project) continue;
-
-      for (let wOffset = 7; wOffset >= 1; wOffset--) {
-        const reportDate = weeksAgo(wOffset);
-        const wNum = isoWeek(reportDate);
-        const wYear = reportDate.getFullYear();
-        const due = weekSunday(reportDate);
-        const isCurrentWeek = wNum === currentWeek && wYear === currentYear;
-
-        for (const mKey of memberKeys) {
-          const user = users[mKey];
-          if (!user) continue;
-
-          const existing = await WeeklyReport.findOne({
-            where: {
-              project_id: project.id,
-              user_id: user.id,
-              week_number: wNum,
-              year: wYear,
-            },
-          });
-          if (existing) continue;
-
-          // Simulate some missing/late reports for realism
-          // member3 misses every 4th week; member4 submits late every 3rd week
-          const skip = (mKey === 'member3' && wOffset % 4 === 0);
-          if (skip) continue; // missing
-
-          const submitDate = new Date(due);
-          let status;
-          if (mKey === 'member4' && wOffset % 3 === 0) {
-            // late: submit 2 days after due
-            submitDate.setDate(due.getDate() + 2);
-            status = REPORT_STATUS.LATE;
-          } else {
-            // on time: submit 1 day before due
-            submitDate.setDate(due.getDate() - 1);
-            status = isCurrentWeek ? REPORT_STATUS.SUBMITTED : REPORT_STATUS.SUBMITTED;
-          }
-
-          await WeeklyReport.create({
-            project_id: project.id,
-            user_id: user.id,
-            week_number: wNum,
-            year: wYear,
-            content: `Báo cáo tuần ${wNum}/${wYear} của ${user.full_name}:\n- Hoàn thành các task được giao.\n- Gặp khó khăn về: cần hỗ trợ thêm.\n- Kế hoạch tuần tới: tiếp tục sprint hiện tại.`,
-            status,
-            submitted_at: submitDate,
-            due_date: due.toISOString().slice(0, 10),
-          });
-        }
-      }
+    /**
+     * Calculates a 4-week (28-day) cycle for a given month and year.
+     * It starts from the first Monday of the month.
+     * @param {number} month - The month (1-12).
+     * @param {number} year - The year.
+     * @returns {{startDate: Date, endDate: Date}}
+     */
+    function getFourWeekCycle(month, year) {
+      const firstDayOfMonth = new Date(year, month - 1, 1);
+      const dayOfWeek = firstDayOfMonth.getDay(); // 0=Sun, 1=Mon, ...
+      // Find the first Monday. If the 1st is a Sunday (0), add 1 day. If it's a Tuesday (2), add 6 days.
+      const daysToAdd = (8 - dayOfWeek) % 7;
+      const startDate = new Date(year, month - 1, 1 + daysToAdd);
+      const endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 27); // 4 weeks = 28 days, so end date is 27 days after start
+      return { startDate, endDate };
     }
-    logger.info('Seeded weekly reports');
+
+    const testYear = 2024;
+    const testMonth = 3; // March
+    const cycle = getFourWeekCycle(testMonth, testYear);
+
+    // --- User 1 (member1): 1 late report, 1 late task ---
+    const user1 = users.member1;
+    // Create 4 weekly reports for March, one of them is LATE
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user1.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.roboarm.id,
+          user_id: user1.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: i === 1 ? REPORT_STATUS.LATE : REPORT_STATUS.SUBMITTED, // The second report is late
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: i === 1 ? new Date(reportDueDate.getTime() + 24 * 60 * 60 * 1000) : new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} cho dự án RoboArm.`,
+        },
+      });
+    }
+    // Create one late task in March
+    await Task.findOrCreate({
+      where: { assignee_id: user1.id, title: 'Test Task - Late' },
+      defaults: {
+        project_id: projects.roboarm.id,
+        title: 'Test Task - Late',
+        assignee_id: user1.id,
+        created_by: users.leader1.id,
+        due_date: new Date(cycle.startDate.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10), // Due in the cycle
+        status: TASK_STATUS.DONE, // It's done...
+        updated_at: new Date(cycle.startDate.getTime() + 12 * 24 * 60 * 60 * 1000), // ...but updated 2 days after due date
+      },
+    });
+
+    // --- User 2 (member2): 2 late reports, 3 late tasks (3 strikes) ---
+    const user2 = users.member2;
+    // Create 4 weekly reports, two are LATE
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user2.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.aivision.id,
+          user_id: user2.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: (i === 1 || i === 3) ? REPORT_STATUS.LATE : REPORT_STATUS.SUBMITTED,
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: (i === 1 || i === 3) ? new Date(reportDueDate.getTime() + 24 * 60 * 60 * 1000) : new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} cho dự án AIVision.`,
+        },
+      });
+    }
+    // Create 3 late tasks to trigger the 3-strikes rule
+    for (let i = 0; i < 3; i++) {
+      await Task.findOrCreate({
+        where: { assignee_id: user2.id, title: `Strike Task ${i + 1}` },
+        defaults: {
+          project_id: projects.aivision.id,
+          title: `Strike Task ${i + 1}`,
+          assignee_id: user2.id,
+          created_by: users.leader2.id,
+          due_date: new Date(cycle.startDate.getTime() + (5 + i * 2) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          status: TASK_STATUS.TODO, // Still not done, so it's late
+        },
+      });
+    }
+
+    // --- User 3 (leader1): Perfect record ---
+    const user3 = users.leader1;
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user3.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.roboarm.id,
+          user_id: user3.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: REPORT_STATUS.SUBMITTED,
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} của Leader.`,
+        },
+      });
+    }
+
+    logger.info('Finished seeding reward module test data.');
 
     logger.info('✅  Seeding complete');
     logger.info('');
