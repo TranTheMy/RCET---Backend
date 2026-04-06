@@ -82,11 +82,38 @@ const resolveRewardAppeal = catchAsync(async (req, res) => {
   return ApiResponse.success(res, detail, 'Đã giải quyết khiếu nại thành công.');
 });
 
+const exportExcel = catchAsync(async (req, res) => {
+  const { projectId } = req.params;
+  
+  // 🌟 Đón cục { workbook, fileName } từ Service
+  const { workbook, fileName } = await rewardService.exportRewardExcel(projectId, req.user);
+  
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename=${fileName}`); // 🌟 Truyền tên file mới vào đây
+  
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
+const importExcel = catchAsync(async (req, res) => {
+  const { projectId } = req.params;
+  if (!req.file) throw { status: 400, message: 'Vui lòng upload file Excel' }; 
+
+  const result = await rewardService.importOverrideExcel(projectId, req.file.buffer, req.user);
+  return ApiResponse.success(res, result, `Đã import thành công ${result.successCount} dòng.`);
+});
+
+// Nhớ export 2 hàm này ra
+
 module.exports = {
   getProjectRewardSheet,
   recalculateProjectReward,
   updateOverrideAmount,
   finalizeSheet,
   appealRewardDetail,
-  resolveRewardAppeal
+  resolveRewardAppeal,
+  exportExcel,
+  importExcel
 };

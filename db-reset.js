@@ -1,4 +1,3 @@
-
 const { sequelize } = require('./src/models');
 const logger = require('./src/utils/logger');
 

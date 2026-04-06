@@ -3,6 +3,9 @@ const rewardController = require('../controllers/reward.controller');
 const authMiddleware = require('../middlewares/auth.middleware');
 const checkRole = require('../middlewares/role.middleware'); // Middleware phân quyền của bạn
 const { SYSTEM_ROLES } = require('../config/constants');
+const multer = require('multer');
+// 🛠️ FIX: Đọc thẳng vào RAM, không cần tạo thư mục uploads nữa
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Tất cả các API thưởng đều yêu cầu đăng nhập
 router.use(authMiddleware);
@@ -61,4 +64,22 @@ router.put(
   rewardController.resolveRewardAppeal
 );
 
+// ==========================================
+// 6. XUẤT FILE EXCEL
+// ==========================================
+router.get(
+  '/project/:projectId/export',
+  checkRole(SYSTEM_ROLES.VIEN_TRUONG, SYSTEM_ROLES.TRUONG_LAB, SYSTEM_ROLES.LEADER, SYSTEM_ROLES.MEMBER),
+  rewardController.exportExcel
+);
+
+// ==========================================
+// 7. IMPORT FILE EXCEL
+// ==========================================
+router.post(
+  '/project/:projectId/import',
+  checkRole(SYSTEM_ROLES.VIEN_TRUONG),
+  upload.single('excel_file'), // 👈 Middleware bắt file có tên là 'excel_file' từ giao diện gửi lên
+  rewardController.importExcel
+);
 module.exports = router;

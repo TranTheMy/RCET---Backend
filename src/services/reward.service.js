@@ -13,21 +13,23 @@ const {
 } = require('../models');
 const { SYSTEM_ROLES } = require('../config/constants');
 const logger = require('../utils/logger');
+const ExcelJS = require('exceljs');
+const fs = require('fs');
 
 // --- CẤU HÌNH TỶ LỆ CHIA THƯỞNG ---
 const MODEL_CONFIG = {
-  1: { student_pct: 0.30, teacher_pct: 0.70 }, 
-  2: { student_pct: 0.40, teacher_pct: 0.60 }, 
-  3: { student_pct: 0.50, teacher_pct: 0.50 }, 
+  1: { student_pct: 0.30, teacher_pct: 0.70 },
+  2: { student_pct: 0.40, teacher_pct: 0.60 },
+  3: { student_pct: 0.50, teacher_pct: 0.50 },
 };
 
 const GRADE_MULTIPLIER = {
-  'A': 1.0, 
-  'B': 0.8, 
-  'C': 0.5, 
+  'A': 1.0,
+  'B': 0.8,
+  'C': 0.5,
 };
 
-const TASK_PENALTY_RATE = 0.05; 
+const TASK_PENALTY_RATE = 0.05;
 
 /**
  * 1. HÀM CORE: TỰ ĐỘNG TÍNH TOÁN
@@ -55,12 +57,12 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
     const baseShare = safeBudget / members.length;
 
     // 🛡️ CHUẨN BỊ BỘ NHỚ ĐỆM ĐỂ BACKUP DỮ LIỆU SỬA TAY
-    const overrideCache = {}; 
+    const overrideCache = {};
 
     let sheet = await RewardSheet.findOne({ where: { project_id: projectId }, transaction });
     if (sheet) {
       if (sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng tính này đã chốt, không thể tính lại.' };
-      
+
       // 🛡️ SAO LƯU DỮ LIỆU SỬA TAY CỦA VIỆN TRƯỞNG TRƯỚC KHI XÓA
       const oldDetails = await RewardSheetDetail.findAll({ where: { sheet_id: sheet.id }, transaction });
       oldDetails.forEach(d => {
@@ -75,14 +77,14 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
       sheet = await RewardSheet.create({
         id: uuidv4(),
         project_id: projectId,
-        total_budget: safeBudget, 
+        total_budget: safeBudget,
         generated_by: generatedBy,
         status: 'DRAFT'
       }, { transaction });
     }
 
     const rewardDetails = [];
-    const partyAAggregator = {}; 
+    const partyAAggregator = {};
 
     for (const member of members) {
       const userId = member.user_id;
@@ -94,7 +96,7 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
       });
 
       let modelType = null;
-      let studentCutPct = 1.0; 
+      let studentCutPct = 1.0;
 
       if (commitment && MODEL_CONFIG[commitment.model_type]) {
         modelType = commitment.model_type;
@@ -116,33 +118,33 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
 
       const modelCutAmount = baseShare * studentCutPct;
 
-      const reports = await WeeklyReport.findAll({ 
+      const reports = await WeeklyReport.findAll({
         where: { project_id: projectId, user_id: userId },
         transaction
       });
       const lateReports = reports.filter(r => r.status === 'LATE' || new Date(r.submitted_at) > new Date(r.due_date));
-      
+
       let reportGrade = 'A';
       if (lateReports.length === 1) reportGrade = 'B';
       else if (lateReports.length >= 2) reportGrade = 'C';
-      
+
       const gradeMultiplier = GRADE_MULTIPLIER[reportGrade];
       const amountAfterGrade = modelCutAmount * gradeMultiplier;
 
-      const tasks = await Task.findAll({ 
+      const tasks = await Task.findAll({
         where: { project_id: projectId, assignee_id: userId },
         transaction
       });
-      const lateTasks = tasks.filter(t => 
-        (t.status !== 'done' && new Date() > new Date(t.due_date)) || 
+      const lateTasks = tasks.filter(t =>
+        (t.status !== 'done' && new Date() > new Date(t.due_date)) ||
         (t.status === 'done' && new Date(t.updated_at) > new Date(t.due_date))
       );
 
-      const penaltyMultiplier = lateTasks.length * TASK_PENALTY_RATE; 
+      const penaltyMultiplier = lateTasks.length * TASK_PENALTY_RATE;
       const penaltyAmount = amountAfterGrade * penaltyMultiplier;
-      
+
       let calculatedAmount = amountAfterGrade - penaltyAmount;
-      if (calculatedAmount < 0) calculatedAmount = 0; 
+      if (calculatedAmount < 0) calculatedAmount = 0;
 
       const penaltyMetadata = JSON.stringify({
         late_reports: lateReports.map(r => ({ week: r.week_number, due: r.due_date })),
@@ -156,7 +158,7 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
         id: uuidv4(), // Cấp sẵn ID
         sheet_id: sheet.id,
         user_id: userId,
-        role: member.role, 
+        role: member.role,
         model_type: modelType,
         base_share: Math.round(baseShare),
         model_cut_amount: Math.round(modelCutAmount),
@@ -168,7 +170,7 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
         final_override_amount: cachedOverride !== undefined ? cachedOverride : null, // 🛡️ Phục hồi dữ liệu
         is_overridden: cachedOverride !== undefined, // 🛡️ Phục hồi dữ liệu
         penalty_metadata: penaltyMetadata
-        
+
       });
     }
 
@@ -176,7 +178,7 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
     for (const [email, data] of Object.entries(partyAAggregator)) {
       const teacher = await User.findOne({ where: { email }, transaction });
       if (teacher) {
-        
+
         // 🛡️ LẤY LẠI DỮ LIỆU ĐÃ SAO LƯU TỪ CACHE (Cho Trưởng Lab)
         const cachedOverrideTeacher = overrideCache[teacher.id];
 
@@ -184,15 +186,15 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
           id: uuidv4(), // Cấp sẵn ID
           sheet_id: sheet.id,
           user_id: teacher.id,
-          role: 'Truong Lab', 
-          model_type: null, 
+          role: 'Truong Lab',
+          model_type: null,
           base_share: 0,
           model_cut_amount: Math.round(data.total_cut),
-          report_grade: 'A', 
+          report_grade: 'A',
           grade_multiplier: 1.0,
           late_task_count: 0,
           penalty_amount: 0,
-          calculated_amount: Math.round(data.total_cut), 
+          calculated_amount: Math.round(data.total_cut),
           final_override_amount: cachedOverrideTeacher !== undefined ? cachedOverrideTeacher : null, // 🛡️ Phục hồi
           is_overridden: cachedOverrideTeacher !== undefined, // 🛡️ Phục hồi
           penalty_metadata: JSON.stringify({
@@ -279,9 +281,9 @@ const finalizeRewardSheet = async (projectId, requestingUser) => {
   }
 
   // Phải include cả bảng details để lấy dữ liệu tính tổng tiền và check khiếu nại
-  const sheet = await RewardSheet.findOne({ 
+  const sheet = await RewardSheet.findOne({
     where: { project_id: projectId },
-    include: [{ model: RewardSheetDetail, as: 'details' }] 
+    include: [{ model: RewardSheetDetail, as: 'details' }]
   });
 
   if (!sheet) throw { status: 404, message: 'Không tìm thấy bảng tính thưởng.' };
@@ -292,9 +294,9 @@ const finalizeRewardSheet = async (projectId, requestingUser) => {
   // ==========================================
   const pendingAppeals = sheet.details.filter(d => d.appeal_status === 'PENDING');
   if (pendingAppeals.length > 0) {
-    throw { 
-      status: 400, 
-      message: `Không thể chốt sổ! Đang có ${pendingAppeals.length} khiếu nại chưa được giải quyết. Vui lòng xử lý khiếu nại trước khi Finalize.` 
+    throw {
+      status: 400,
+      message: `Không thể chốt sổ! Đang có ${pendingAppeals.length} khiếu nại chưa được giải quyết. Vui lòng xử lý khiếu nại trước khi Finalize.`
     };
   }
   // ==========================================
@@ -306,15 +308,15 @@ const finalizeRewardSheet = async (projectId, requestingUser) => {
 
   for (const detail of sheet.details) {
     // Nếu có sửa tay, lấy tiền sửa tay. Nếu không, lấy tiền tính tự động.
-    const payoutForUser = detail.is_overridden 
-        ? Number(detail.final_override_amount) 
-        : Number(detail.calculated_amount);
-        
+    const payoutForUser = detail.is_overridden
+      ? Number(detail.final_override_amount)
+      : Number(detail.calculated_amount);
+
     totalActualPayout += payoutForUser;
   }
 
   const projectBudget = Number(sheet.total_budget);
-  
+
   // Làm tròn tới số nguyên để tránh lỗi thập phân của JS (VD: 0.00001)
   const safeTotalPayout = Math.round(totalActualPayout);
   const safeProjectBudget = Math.round(projectBudget);
@@ -322,9 +324,9 @@ const finalizeRewardSheet = async (projectId, requestingUser) => {
   // Nếu tổng chi thực tế LỚN HƠN ngân sách dự án -> CHẶN
   if (safeTotalPayout > safeProjectBudget) {
     const formatter = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' });
-    throw { 
-      status: 400, 
-      message: `Không thể chốt sổ! Tổng tiền chi trả (${formatter.format(safeTotalPayout)}) đang VƯỢT QUÁ ngân sách dự án (${formatter.format(safeProjectBudget)}). Vui lòng điều chỉnh lại.` 
+    throw {
+      status: 400,
+      message: `Không thể chốt sổ! Tổng tiền chi trả (${formatter.format(safeTotalPayout)}) đang VƯỢT QUÁ ngân sách dự án (${formatter.format(safeProjectBudget)}). Vui lòng điều chỉnh lại.`
     };
   }
   // ==========================================
@@ -372,7 +374,7 @@ const resolveAppeal = async (detailId, resolutionStatus, requestingUser) => {
 
   // resolutionStatus chỉ được nhận 'RESOLVED' hoặc 'REJECTED'
   if (!['RESOLVED', 'REJECTED'].includes(resolutionStatus)) {
-      throw { status: 400, message: 'Trạng thái giải quyết không hợp lệ.' };
+    throw { status: 400, message: 'Trạng thái giải quyết không hợp lệ.' };
   }
 
   const detail = await RewardSheetDetail.findByPk(detailId, {
@@ -390,7 +392,147 @@ const resolveAppeal = async (detailId, resolutionStatus, requestingUser) => {
   return detail;
 };
 
-// Đừng quên export hàm này ở module.exports cuối file nhé!
+/**
+ * 7. XUẤT EXCEL BẢNG LƯƠNG (Có tên Dự án chuẩn)
+ */
+const exportRewardExcel = async (projectId, requestingUser) => {
+  const sheetData = await getRewardSheetByProject(projectId, requestingUser);
+
+  // 🌟 Lấy thông tin dự án từ DB
+  const project = await Project.findByPk(projectId);
+  let fileName = `BangTinhThuong_${projectId}.xlsx`; // Tên mặc định phòng hờ lỗi
+
+  if (project) {
+    // Hàm hỗ trợ làm sạch chuỗi (xóa dấu tiếng Việt, thay khoảng trắng thành _)
+    const sanitizeString = (str) => {
+      if (!str) return '';
+      return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, "_");
+    };
+
+    const safeName = sanitizeString(project.name);
+    const safeCode = sanitizeString(project.code);
+    const namePart = [safeName, safeCode].filter(Boolean).join('_');
+
+    if (namePart) {
+      fileName = `BangTinhThuong_${namePart}.xlsx`;
+    }
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Bảng Tính Thưởng');
+
+  worksheet.columns = [
+    { header: 'ID Chi Tiết (KHÔNG SỬA)', key: 'id', width: 40 },
+    { header: 'Họ và Tên', key: 'name', width: 25 },
+    { header: 'Email', key: 'email', width: 25 },
+    { header: 'Vai trò', key: 'role', width: 15 },
+    { header: 'Thực nhận tự động (VNĐ)', key: 'auto_amount', width: 25 },
+    { header: 'Điều chỉnh tay (VNĐ)', key: 'override_amount', width: 25 },
+    { header: 'Trạng thái Khiếu nại', key: 'appeal', width: 20 },
+  ];
+
+  worksheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+
+  sheetData.details.forEach(row => {
+    worksheet.addRow({
+      id: row.id,
+      name: row.user.full_name,
+      email: row.user.email,
+      role: row.role,
+      auto_amount: Number(row.calculated_amount),
+      override_amount: row.final_override_amount !== null ? Number(row.final_override_amount) : '',
+      appeal: row.appeal_status
+    });
+  });
+
+  worksheet.getColumn('id').hidden = true;
+
+  // Trả về cả file và tên file mong muốn
+  return { workbook, fileName };
+};
+
+/**
+ * 8. IMPORT EXCEL TỪ RAM (Xử lý an toàn Công thức & Dấu phẩy)
+ */
+const importOverrideExcel = async (projectId, fileBuffer, requestingUser) => {
+  if (requestingUser.system_role !== 'vien_truong') {
+    throw { status: 403, message: 'Chỉ Viện Trưởng mới có quyền Import file.' };
+  }
+
+  const sheet = await RewardSheet.findOne({ where: { project_id: projectId } });
+  if (!sheet) throw { status: 404, message: 'Bảng tính chưa tồn tại.' };
+  if (sheet.status === 'FINALIZED') throw { status: 400, message: 'Bảng này đã chốt, không thể Import ghi đè.' };
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fileBuffer);
+  const worksheet = workbook.getWorksheet(1);
+
+  const updates = [];
+
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber > 1) {
+      // 1. Lấy ID an toàn (Cột 1 bị ẩn)
+      const rawId = row.getCell(1).value;
+      let detailId = typeof rawId === 'object' ? (rawId?.text || rawId?.result) : rawId;
+
+      // 2. Lấy dữ liệu từ cột "Điều chỉnh tay" (Cột 6 / Cột F)
+      let rawVal = row.getCell(6).value;
+      let overrideVal = rawVal;
+
+      if (rawVal !== null && rawVal !== undefined) {
+          // 🛡️ BÓC TÁCH NẾU LÀ CÔNG THỨC EXCEL
+          if (typeof rawVal === 'object') {
+              if (rawVal.result !== undefined) {
+                  overrideVal = rawVal.result; // Lấy kết quả đã tính của công thức
+              } else if (rawVal.formula) {
+                  // Bắn lỗi thẳng ra Web nếu Excel không chịu lưu kết quả
+                  throw { status: 400, message: `Lỗi dòng ${rowNumber}: Cột "Điều chỉnh tay" đang chứa công thức (${rawVal.formula}) nhưng không có kết quả. Hãy bôi đen cột đó trong Excel -> Copy -> Paste as Values (Dán giá trị) rồi Import lại!` };
+              }
+          }
+
+          // 🛡️ XÓA DẤU PHẨY NẾU LÀ TEXT (VD: "5,000,000")
+          if (typeof overrideVal === 'string') {
+              overrideVal = overrideVal.replace(/[,.\s]/g, '');
+          }
+          
+          // Đảm bảo chắc chắn nó là số
+          overrideVal = Number(overrideVal);
+          if (isNaN(overrideVal)) overrideVal = null;
+      } else {
+          overrideVal = null; // Viện trưởng xóa trống ô thì đưa về tính tự động
+      }
+
+      if (detailId) {
+        updates.push({
+          detailId: detailId.toString().trim(),
+          overrideVal: overrideVal
+        });
+      }
+    }
+  });
+
+  let successCount = 0;
+  for (const item of updates) {
+    const detail = await RewardSheetDetail.findOne({
+      where: { id: item.detailId, sheet_id: sheet.id }
+    });
+
+    if (detail) {
+      // Ép kiểu DB ra số để so sánh chuẩn xác (tránh lỗi String !== Number)
+      const currentVal = detail.final_override_amount !== null ? Number(detail.final_override_amount) : null;
+      
+      if (currentVal !== item.overrideVal) {
+        detail.final_override_amount = item.overrideVal;
+        detail.is_overridden = item.overrideVal !== null;
+        await detail.save();
+        successCount++;
+      }
+    }
+  }
+
+  return { successCount };
+};
 
 module.exports = {
   autoGenerateProjectReward,
@@ -399,4 +541,6 @@ module.exports = {
   finalizeRewardSheet,
   submitAppeal,
   resolveAppeal,
+  exportRewardExcel,
+  importOverrideExcel,
 };

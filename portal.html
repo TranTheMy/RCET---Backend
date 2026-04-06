@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RCET Portal</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
+
 <body class="bg-slate-100 text-gray-800 min-h-screen">
 
     <div id="loginScreen" class="flex items-center justify-center min-h-screen">
@@ -14,16 +16,23 @@
             <form id="loginForm" onsubmit="handleLogin(event)">
                 <div class="mb-4">
                     <label class="block text-sm font-semibold text-gray-600 mb-1">Email</label>
-                    <input type="email" id="email" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required placeholder="admin@rcet.vn">
+                    <input type="email" id="email"
+                        class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required
+                        placeholder="admin@rcet.vn">
                 </div>
                 <div class="mb-6">
                     <label class="block text-sm font-semibold text-gray-600 mb-1">Mật khẩu</label>
-                    <input type="password" id="password" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required placeholder="••••••••">
+                    <input type="password" id="password"
+                        class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" required
+                        placeholder="••••••••">
                 </div>
-                <button type="submit" id="loginBtn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded transition">
+                <button type="submit" id="loginBtn"
+                    class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded transition">
                     Đăng Nhập
                 </button>
-                <div id="loginError" class="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded text-center font-medium hidden"></div>
+                <div id="loginError"
+                    class="mt-4 text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded text-center font-medium hidden">
+                </div>
             </form>
         </div>
     </div>
@@ -34,13 +43,14 @@
                 <h1 class="text-3xl font-bold text-gray-800">Dự Án Đã Hoàn Thành</h1>
                 <p class="text-gray-500 mt-1">Chọn một dự án để xem hoặc chốt bảng tính thưởng</p>
             </div>
-            <button onclick="logout()" class="bg-red-50 hover:bg-red-100 text-red-600 px-4 py-2 rounded font-semibold border border-red-200 transition shadow-sm">
+            <button onclick="logout()"
+                class="bg-red-50 hover:bg-red-100 text-red-600 px-4 py-2 rounded font-semibold border border-red-200 transition shadow-sm">
                 Đăng Xuất
             </button>
         </div>
 
         <div id="projectList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            </div>
+        </div>
     </div>
 
     <script>
@@ -86,14 +96,14 @@
                 // 🛡️ BỘ QUÉT TOKEN THÔNG MINH
                 // Quét qua mọi định dạng JSON phổ biến mà BE có thể trả về
                 const token = json.data?.access_token || json.data?.accessToken || json.data?.token || json.access_token || json.token;
-                
+
                 if (!token) {
                     throw new Error("Đăng nhập thành công nhưng Frontend không tìm thấy Token trong dữ liệu trả về.");
                 }
 
                 // Lưu token an toàn vào trình duyệt
                 localStorage.setItem('rcet_token', token);
-                
+
                 // Chuyển màn hình
                 showProjectScreen();
             } catch (err) {
@@ -110,7 +120,7 @@
         async function showProjectScreen() {
             document.getElementById('loginScreen').classList.add('hidden');
             document.getElementById('projectScreen').classList.remove('hidden');
-            
+
             const token = localStorage.getItem('rcet_token');
             const listDiv = document.getElementById('projectList');
             listDiv.innerHTML = '<p class="text-gray-500 col-span-full font-medium">Đang tải dữ liệu từ máy chủ...</p>';
@@ -120,19 +130,19 @@
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 const json = await res.json();
-                
+
                 // Bắt lỗi 401 Unauthorized nếu token hết hạn
                 if (res.status === 401) {
                     alert("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại!");
                     logout();
                     return;
                 }
-                
+
                 if (!res.ok) throw new Error(json.message || "Lỗi khi lấy danh sách dự án.");
 
                 // Lấy mảng dự án từ dữ liệu trả về
                 const projects = json.data?.projects || json.data || [];
-                
+
                 if (projects.length === 0) {
                     listDiv.innerHTML = `
                         <div class="col-span-full bg-white p-8 text-center rounded-xl border border-dashed border-gray-300">
@@ -151,8 +161,8 @@
                         <h3 class="text-lg font-bold text-gray-800 mb-2 truncate" title="${p.name}">${p.name}</h3>
                         <p class="text-sm text-gray-500 mb-5">Ngân sách: <span class="font-semibold text-indigo-700">${Number(p.budget || 0).toLocaleString('vi-VN')} đ</span></p>
                         
-                        <a href="reward_dashboard.html?projectId=${p.id}" class="block text-center bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 font-semibold py-2 rounded transition border border-indigo-100">
-                            📊 Xem Bảng Lương
+                        <a href="reward_dashboard.html?projectId=${p.id}&projectName=${encodeURIComponent(p.name)}" class="block text-center bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 font-semibold py-2 rounded transition border border-indigo-100">
+                             📊 Xem Bảng Lương
                         </a>
                     </div>
                 `).join('');
@@ -171,4 +181,5 @@
         }
     </script>
 </body>
+
 </html>
