@@ -140,15 +140,38 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
         (t.status === 'done' && new Date(t.updated_at) > new Date(t.due_date))
       );
 
-      const penaltyMultiplier = lateTasks.length * TASK_PENALTY_RATE;
-      const penaltyAmount = amountAfterGrade * penaltyMultiplier;
+      // ==========================================
+      // 🌟 LOGIC PHẠT TASK BẬC THANG (CHỈ SỬA TOÁN, GIỮ NGUYÊN DB)
+      // ==========================================
+      let penaltyMultiplier = 0;
+      const lateCount = lateTasks.length;
+      
+      if (lateCount >= 1) penaltyMultiplier += 0.03; // Lần 1: 3%
+      if (lateCount >= 2) penaltyMultiplier += 0.03; // Lần 2: +3% (Tổng 6%)
+      if (lateCount >= 3) penaltyMultiplier += 0.20; // Lần 3: +20% (Tổng 26%)
+      if (lateCount >= 4) penaltyMultiplier += 0.20; // Lần 4: +20% (Tổng 46%)
+      if (lateCount >= 5) penaltyMultiplier += 0.50; // Lần 5: +50% (Tổng 96%)
+      if (lateCount >= 6) penaltyMultiplier = 1.0;   // Lần 6: 100% (Bị đuổi)
 
-      let calculatedAmount = amountAfterGrade - penaltyAmount;
+      if (penaltyMultiplier > 1.0) penaltyMultiplier = 1.0;
+
+      // ==========================================
+      // 🌟 KẾT TOÁN: GỐC - PHẠT - THUẾ
+      // ==========================================
+      const grossAmount = amountAfterGrade; // Tiền gốc sau khi nhân hệ số báo cáo
+      const taxAmount = grossAmount * 0.10; // Thuế TNCN (10% tính trên Gốc)
+      const penaltyAmount = grossAmount * penaltyMultiplier; // Phạt (tính trên Gốc)
+
+      let calculatedAmount = grossAmount - penaltyAmount - taxAmount; // Thực nhận
       if (calculatedAmount < 0) calculatedAmount = 0;
 
+      // Lưu lại thông tin để hiển thị ra UI
       const penaltyMetadata = JSON.stringify({
         late_reports: lateReports.map(r => ({ week: r.week_number, due: r.due_date })),
-        late_tasks: lateTasks.map(t => ({ id: t.id, title: t.title, due: t.due_date }))
+        late_tasks: lateTasks.map(task => ({ id: task.id, title: task.title, due: task.due_date })),
+        pre_tax: Math.round(grossAmount),
+        tax_amount: Math.round(taxAmount),
+        is_kicked: lateCount >= 6
       });
 
       // 🛡️ LẤY LẠI DỮ LIỆU ĐÃ SAO LƯU TỪ CACHE
@@ -179,6 +202,13 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
       const teacher = await User.findOne({ where: { email }, transaction });
       if (teacher) {
 
+        // ==========================================
+        // 🌟 TÍNH THUẾ TNCN (10%) CHO TRƯỞNG LAB
+        // ==========================================
+        const grossTeacher = data.total_cut;         // Gốc
+        const taxTeacher = grossTeacher * 0.10;      // Thuế 10%
+        let calcTeacher = grossTeacher - taxTeacher; // Thực nhận (Trưởng Lab không bị phạt Task)
+
         // 🛡️ LẤY LẠI DỮ LIỆU ĐÃ SAO LƯU TỪ CACHE (Cho Trưởng Lab)
         const cachedOverrideTeacher = overrideCache[teacher.id];
 
@@ -194,12 +224,14 @@ const autoGenerateProjectReward = async (projectId, generatedBy) => {
           grade_multiplier: 1.0,
           late_task_count: 0,
           penalty_amount: 0,
-          calculated_amount: Math.round(data.total_cut),
+          calculated_amount: Math.round(calcTeacher), // 👈 Tiền thực nhận ĐÃ TRỪ THUẾ
           final_override_amount: cachedOverrideTeacher !== undefined ? cachedOverrideTeacher : null, // 🛡️ Phục hồi
           is_overridden: cachedOverrideTeacher !== undefined, // 🛡️ Phục hồi
           penalty_metadata: JSON.stringify({
             info: 'Thu nhập trích từ % cam kết của các sinh viên trong dự án',
-            sources: data.from_students
+            sources: data.from_students,
+            pre_tax: Math.round(grossTeacher), // 🌟 Lưu tiền gốc để Web in ra
+            tax_amount: Math.round(taxTeacher) // 🌟 Lưu tiền thuế để Web in ra
           })
         });
       }
@@ -393,7 +425,7 @@ const resolveAppeal = async (detailId, resolutionStatus, requestingUser) => {
 };
 
 /**
- * 7. XUẤT EXCEL BẢNG LƯƠNG (Có tên Dự án chuẩn)
+ * 7. XUẤT EXCEL BẢNG LƯƠNG (Có tên Dự án chuẩn & Có cột Thuế)
  */
 const exportRewardExcel = async (projectId, requestingUser) => {
   const sheetData = await getRewardSheetByProject(projectId, requestingUser);
@@ -421,11 +453,14 @@ const exportRewardExcel = async (projectId, requestingUser) => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Bảng Tính Thưởng');
 
+  // 🌟 BỔ SUNG 2 CỘT THUẾ VÀO HEADER EXCEL
   worksheet.columns = [
     { header: 'ID Chi Tiết (KHÔNG SỬA)', key: 'id', width: 40 },
     { header: 'Họ và Tên', key: 'name', width: 25 },
     { header: 'Email', key: 'email', width: 25 },
     { header: 'Vai trò', key: 'role', width: 15 },
+    { header: 'Trước Thuế (VNĐ)', key: 'pre_tax', width: 20 },     // 👈 Cột mới
+    { header: 'Thuế 10% (VNĐ)', key: 'tax_amount', width: 20 },    // 👈 Cột mới
     { header: 'Thực nhận tự động (VNĐ)', key: 'auto_amount', width: 25 },
     { header: 'Điều chỉnh tay (VNĐ)', key: 'override_amount', width: 25 },
     { header: 'Trạng thái Khiếu nại', key: 'appeal', width: 20 },
@@ -435,11 +470,19 @@ const exportRewardExcel = async (projectId, requestingUser) => {
   worksheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
 
   sheetData.details.forEach(row => {
+    // 🌟 Giải mã JSON để lấy số tiền Thuế lưu trong meta
+    let meta = {};
+    try { 
+        meta = JSON.parse(row.penalty_metadata || '{}'); 
+    } catch(e) {}
+
     worksheet.addRow({
       id: row.id,
-      name: row.user.full_name,
-      email: row.user.email,
+      name: row.user ? row.user.full_name : 'N/A', // Bọc thêm check an toàn lỡ user bị xóa
+      email: row.user ? row.user.email : 'N/A',
       role: row.role,
+      pre_tax: meta.pre_tax || 0,        // 👈 Đổ data Gốc
+      tax_amount: meta.tax_amount || 0,  // 👈 Đổ data Thuế
       auto_amount: Number(row.calculated_amount),
       override_amount: row.final_override_amount !== null ? Number(row.final_override_amount) : '',
       appeal: row.appeal_status
@@ -477,7 +520,7 @@ const importOverrideExcel = async (projectId, fileBuffer, requestingUser) => {
       let detailId = typeof rawId === 'object' ? (rawId?.text || rawId?.result) : rawId;
 
       // 2. Lấy dữ liệu từ cột "Điều chỉnh tay" (Cột 6 / Cột F)
-      let rawVal = row.getCell(6).value;
+      let rawVal = row.getCell(8).value;
       let overrideVal = rawVal;
 
       if (rawVal !== null && rawVal !== undefined) {
