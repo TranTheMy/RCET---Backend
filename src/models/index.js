@@ -8,6 +8,15 @@ const Task = require('./Task');
 const Milestone = require('./Milestone');
 const MilestoneTask = require('./MilestoneTask');
 const WeeklyReport = require('./WeeklyReport');
+
+// ===== Verilog + Notification =====
+const VerilogProblem = require('./VerilogProblem');
+const VerilogTestCase = require('./VerilogTestCase');
+const VerilogSubmission = require('./VerilogSubmission');
+const VerilogSubmissionResult = require('./VerilogSubmissionResult');
+const Notification = require('./Notification');
+
+// ===== Commitment + Reward =====
 const Commitment = require('./Commitment');
 const RewardSheet = require('./RewardSheet');
 const RewardSheetDetail = require('./RewardSheetDetail');
@@ -26,7 +35,7 @@ AuditLog.belongsTo(User, { foreignKey: 'target_user_id', as: 'target' });
 Project.belongsTo(User, { foreignKey: 'leader_id', as: 'leader' });
 User.hasMany(Project, { foreignKey: 'leader_id', as: 'ledProjects' });
 
-// Project <-> Members (through ProjectMember)
+// Project <-> Members
 Project.hasMany(ProjectMember, { foreignKey: 'project_id', as: 'members' });
 ProjectMember.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 ProjectMember.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -36,7 +45,7 @@ User.hasMany(ProjectMember, { foreignKey: 'user_id', as: 'projectMemberships' })
 Project.hasMany(Task, { foreignKey: 'project_id', as: 'tasks' });
 Task.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
-// Task <-> User (Assignee & Creator)
+// Task <-> User
 Task.belongsTo(User, { foreignKey: 'assignee_id', as: 'assignee' });
 Task.belongsTo(User, { foreignKey: 'created_by', as: 'creator' });
 User.hasMany(Task, { foreignKey: 'assignee_id', as: 'assignedTasks' });
@@ -46,37 +55,58 @@ User.hasMany(Task, { foreignKey: 'created_by', as: 'createdTasks' });
 Project.hasMany(Milestone, { foreignKey: 'project_id', as: 'milestones' });
 Milestone.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
-// Milestone <-> Tasks (through MilestoneTask)
+// Milestone <-> Tasks
 Milestone.belongsToMany(Task, { 
   through: MilestoneTask, 
   foreignKey: 'milestone_id', 
   as: 'tasks',
-  onDelete: 'CASCADE' // Nhánh này giữ nguyên CASCADE để khi xóa Milestone thì tự xóa liên kết
+  onDelete: 'CASCADE'
 });
 
 Task.belongsToMany(Milestone, { 
   through: MilestoneTask, 
   foreignKey: 'task_id', 
   as: 'milestones',
-  onDelete: 'NO ACTION' // <--- THÊM DÒNG NÀY ĐỂ NGĂN SQL SERVER BÁO LỖI
+  onDelete: 'NO ACTION'
 });
 
-// Project <-> WeeklyReports
+// Weekly Reports
 Project.hasMany(WeeklyReport, { foreignKey: 'project_id', as: 'weeklyReports' });
 WeeklyReport.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 WeeklyReport.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
 User.hasMany(WeeklyReport, { foreignKey: 'user_id', as: 'authoredWeeklyReports' });
 
-// ======== Commitment Associations ========
+// ===== Verilog =====
+VerilogProblem.belongsTo(User, { foreignKey: 'owner_id', as: 'owner' });
+User.hasMany(VerilogProblem, { foreignKey: 'owner_id', as: 'verilogProblems' });
+
+VerilogProblem.hasMany(VerilogTestCase, { foreignKey: 'problem_id', as: 'testcases', onDelete: 'CASCADE', hooks: true });
+VerilogTestCase.belongsTo(VerilogProblem, { foreignKey: 'problem_id', as: 'problem' });
+
+VerilogProblem.hasMany(VerilogSubmission, { foreignKey: 'problem_id', as: 'submissions', onDelete: 'CASCADE', hooks: true });
+VerilogSubmission.belongsTo(VerilogProblem, { foreignKey: 'problem_id', as: 'problem' });
+
+VerilogSubmission.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(VerilogSubmission, { foreignKey: 'user_id', as: 'verilogSubmissions' });
+
+VerilogSubmission.hasMany(VerilogSubmissionResult, { foreignKey: 'submission_id', as: 'results', onDelete: 'CASCADE', hooks: true });
+VerilogSubmissionResult.belongsTo(VerilogSubmission, { foreignKey: 'submission_id', as: 'submission' });
+
+VerilogSubmissionResult.belongsTo(VerilogTestCase, { foreignKey: 'testcase_id', as: 'testcase' });
+VerilogTestCase.hasMany(VerilogSubmissionResult, { foreignKey: 'testcase_id', as: 'results', onDelete: 'SET NULL' });
+
+// ===== Notification =====
+User.hasMany(Notification, { foreignKey: 'user_id', as: 'notifications' });
+Notification.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
+// ===== Commitment =====
 Commitment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(Commitment, { foreignKey: 'user_id', as: 'commitments' });
 
-// ======== Reward Associations ========
-// Thêm liên kết 1-1 giữa Project và RewardSheet
+// ===== Reward =====
 Project.hasOne(RewardSheet, { foreignKey: 'project_id', as: 'rewardSheet' });
 RewardSheet.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 
-// Liên kết giữa Sheet và Detail
 RewardSheet.hasMany(RewardSheetDetail, { foreignKey: 'sheet_id', as: 'details' });
 RewardSheetDetail.belongsTo(RewardSheet, { foreignKey: 'sheet_id', as: 'sheet' });
 
@@ -86,6 +116,7 @@ User.hasMany(RewardSheetDetail, { foreignKey: 'user_id', as: 'rewardDetails' });
 RewardSheet.belongsTo(User, { foreignKey: 'generated_by', as: 'generator' });
 RewardSheet.belongsTo(User, { foreignKey: 'finalized_by', as: 'finalizer' });
 
+// ===== EXPORT =====
 const db = {
   sequelize,
   User,
@@ -97,6 +128,11 @@ const db = {
   Milestone,
   MilestoneTask,
   WeeklyReport,
+  VerilogProblem,
+  VerilogTestCase,
+  VerilogSubmission,
+  VerilogSubmissionResult,
+  Notification,
   Commitment,
   RewardSheet,
   RewardSheetDetail,
