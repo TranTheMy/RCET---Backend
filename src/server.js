@@ -10,11 +10,11 @@ const start = async () => {
     await sequelize.authenticate();
     logger.info('Database connection established successfully');
 
-    // Sync models: create tables if they don't exist (use npm run db:reset to rebuild schema)
+    // Sync models
     await sequelize.sync();
     logger.info('Database models synchronized');
 
-    // Initialize Verilog judge service
+    // ===== Verilog Judge =====
     try {
       const judge = VerilogJudge.getInstance();
       await judge.initialize();
@@ -23,10 +23,33 @@ const start = async () => {
       logger.warn('Verilog judge service not available (Yosys/Iverilog may not be installed):', err.message);
     }
 
+    // ===== Seed test user =====
+    const { User } = require('./models');
+    const { SYSTEM_ROLES } = require('./config/constants');
+    const bcrypt = require('bcryptjs');
+
+    const testUserEmail = 'vien_truong@rcet.dev';
+    const userExists = await User.findOne({ where: { email: testUserEmail } });
+
+    if (!userExists) {
+      logger.info('Test user not found. Seeding database with a test user...');
+      const hashedPassword = await bcrypt.hash('password123', 10);
+      await User.create({
+        full_name: 'Vien Truong',
+        email: testUserEmail,
+        password_hash: hashedPassword,
+        system_role: SYSTEM_ROLES.VIEN_TRUONG,
+        status: 'active',
+        email_verified: true,
+      });
+      logger.info(`Test user '${testUserEmail}' created with password 'password123'.`);
+    }
+
     // Start server
     app.listen(env.port, () => {
       logger.info(`Server running on port ${env.port} in ${env.nodeEnv} mode`);
     });
+
   } catch (error) {
     logger.error('Failed to start server:', error);
     process.exit(1);

@@ -12,6 +12,7 @@ const errorHandler = require('./middlewares/error.middleware');
 const ApiResponse = require('./utils/response');
 
 const app = express();
+app.disable('etag');
 
 // Security headers — disable CSP for Swagger UI; disable CORP to allow cross-origin access
 app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
@@ -21,12 +22,16 @@ const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:5173',
   'http://localhost:5173',
   'http://localhost:5174',
+  'http://localhost:5500', // Cho phép Live Server (localhost)
+  'http://127.0.0.1:5500', // Cho phép Live Server (127.0.0.1)
 ];
 const corsOptions = {
   origin: (origin, callback) => {
-    // allow requests with no origin (mobile, curl, Postman)
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
+    if (allowedOrigins.includes(origin) || !origin) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -85,6 +90,9 @@ app.get('/api-docs.json', (req, res) => {
 app.get('/api/health', (req, res) => {
   ApiResponse.success(res, { status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Serve static files from 'public' directory
+app.use(express.static('public'));
 
 // API routes
 app.use('/api', routes);
