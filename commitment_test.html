@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commitment Test (Draft Flow)</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; color: #333; }
+        .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #444; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .form-group { display: flex; flex-direction: column; }
+        label { font-weight: bold; margin-bottom: 5px; }
+        input, select { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+        .token-input { width: 100%; box-sizing: border-box; }
+        .button-group { margin-top: 20px; display: flex; gap: 10px; }
+        button { padding: 10px 15px; border: none; border-radius: 4px; color: #fff; font-size: 1em; cursor: pointer; transition: background-color 0.3s; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #createBtn { background-color: #007bff; }
+        #createBtn:hover:not(:disabled) { background-color: #0056b3; }
+        #previewBtn { background-color: #17a2b8; }
+        #previewBtn:hover:not(:disabled) { background-color: #117a8b; }
+        #finalizeBtn { background-color: #28a745; }
+        #finalizeBtn:hover:not(:disabled) { background-color: #1e7e34; }
+        #status { margin-top: 20px; padding: 10px; border-radius: 4px; background-color: #e9ecef; border: 1px solid #ced4da; white-space: pre-wrap; word-wrap: break-word; }
+        /* Style cho các ô bị khóa */
+        .readonly-input { background-color: #e9ecef; cursor: not-allowed; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Commitment Test Page (Draft Flow)</h1>
+        
+        <div class="form-group">
+            <label for="authToken">Auth Token (Bearer)</label>
+            <input type="text" id="authToken" class="token-input" placeholder="Dán token đăng nhập vào đây...">
+        </div>
+        
+        <div class="form-group" style="flex-direction: row; align-items: center; gap: 10px; margin-top: 10px;">
+            <button id="loadDataBtn" style="background-color: #6c757d;">Tải dữ liệu tự động</button>
+            <span id="loadStatus" style="font-size: 0.9em; color: #555;">(Nhập token rồi bấm nút này)</span>
+        </div>
+
+        <hr style="margin: 20px 0;">
+
+        <input type="hidden" id="draftId"> <div class="form-grid">
+            <div class="form-group">
+                <h2>Bên A (Trường)</h2>
+                <label for="partyASelect">Họ và tên</label>
+                <select id="partyASelect">
+                    <option value="" disabled selected>-- Chọn Giảng viên --</option>
+                </select>
+                
+                <label for="partyATitle">Chức vụ</label>
+                <input type="text" id="partyATitle" value="" placeholder="Ví dụ: Tiến sĩ, ThS...">
+                
+                <label for="partyAOffice">Địa chỉ</label>
+                <input type="text" id="partyAOffice" value="" placeholder="Ví dụ: Khoa CNTT...">
+                
+                <label for="partyAEmail">Email</label>
+                <input type="text" id="partyAEmail" class="readonly-input" readonly>
+            </div>
+
+            <div class="form-group">
+                <h2>Bên B (Sinh viên)</h2>
+                <label for="partyBName">Họ và tên</label>
+                <input type="text" id="partyBName" class="readonly-input" readonly>
+                
+                <label for="partyBMSSV">MSSV</label>
+                <input type="text" id="partyBMSSV" class="readonly-input" readonly>
+                
+                <label for="partyBEmail">Email</label>
+                <input type="text" id="partyBEmail" class="readonly-input" readonly>
+                
+                <label for="partyBClass">Lớp</label>
+                <input type="text" id="partyBClass" value="" placeholder="Nhập lớp...">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <h2>Thông tin chung</h2>
+            <label for="modelType">Loại cam kết</label>
+            <select id="modelType">
+                <option value="" disabled selected>-- Chọn mô hình --</option>
+                <option value="1">Mô hình 1: Giảng viên làm chính</option>
+                <option value="2">Mô hình 2: Đồng tác giả</option>
+                <option value="3">Mô hình 3: Sinh viên làm chính</option>
+            </select>
+            <label for="commitmentLocation">Địa điểm</label>
+            <input type="text" id="commitmentLocation" value="">
+        </div>
+
+        <div class="button-group">
+            <button id="createBtn">1. Tạo nháp & Xem trước</button>
+            <button id="previewBtn" disabled>2. Xem lại PDF</button>
+            <button id="finalizeBtn" disabled>3. Hoàn tất & Lưu</button>
+        </div>
+
+        <div id="status">Trạng thái: Sẵn sàng.</div>
+    </div>
+
+  <script>
+    const API_BASE_URL = 'http://localhost:3000/api';
+    const statusDiv = document.getElementById('status');
+
+    const createBtn = document.getElementById('createBtn');
+    const previewBtn = document.getElementById('previewBtn');
+    const finalizeBtn = document.getElementById('finalizeBtn');
+    
+    const draftIdInput = document.getElementById('draftId');
+    const authTokenInput = document.getElementById('authToken');
+    
+    let partyAList = []; // Lưu danh sách user Bên A
+
+    function getAuthHeader() {
+        const token = authTokenInput.value;
+        if (!token) {
+            statusDiv.textContent = 'Lỗi: Vui lòng nhập Auth Token.';
+            return null;
+        }
+        return { 'Authorization': `Bearer ${token}` };
+    }
+
+    // --- XỬ LÝ TẢI DỮ LIỆU TỰ ĐỘNG ---
+    document.getElementById('loadDataBtn').addEventListener('click', async () => {
+        const headers = getAuthHeader();
+        if (!headers) return;
+
+        const loadStatus = document.getElementById('loadStatus');
+        loadStatus.textContent = 'Đang tải...';
+
+        try {
+            // 1. Lấy thông tin cá nhân (Bên B) - Cần đảm bảo API GET /api/users/me đã hoạt động
+            const meRes = await fetch(`${API_BASE_URL}/users/me`, { headers });
+            if (meRes.ok) {
+                const meResponse = await meRes.json();
+                const meData = meResponse.data;
+                document.getElementById('partyBName').value = meData.full_name || '';
+                document.getElementById('partyBMSSV').value = meData.student_code || '';
+                document.getElementById('partyBEmail').value = meData.email || '';
+            }
+
+            // 2. Lấy danh sách Giảng viên (Bên A) - Cần đảm bảo API GET /api/users/party-a đã hoạt động
+            const aRes = await fetch(`${API_BASE_URL}/users/party-a`, { headers });
+            if (aRes.ok) {
+                const aResponse = await aRes.json();
+                partyAList = aResponse.data;
+                const select = document.getElementById('partyASelect');
+                select.innerHTML = '<option value="" disabled selected>-- Chọn Giảng viên --</option>';
+                partyAList.forEach(user => {
+                    const opt = document.createElement('option');
+                    opt.value = user.id;
+                    opt.textContent = user.full_name;
+                    select.appendChild(opt);
+                });
+            }
+            loadStatus.textContent = '✅ Đã tải xong! Vui lòng chọn Giảng viên và điền các trường còn lại.';
+        } catch (error) {
+            loadStatus.textContent = `❌ Lỗi: ${error.message}`;
+            console.error("Lỗi khi tải dữ liệu tự động:", error);
+        }
+    });
+
+    // --- TỰ ĐỘNG ĐIỀN EMAIL BÊN A KHI CHỌN DROPDOWN ---
+    document.getElementById('partyASelect').addEventListener('change', (e) => {
+        const selectedId = e.target.value;
+        const selectedUser = partyAList.find(u => u.id == selectedId);
+        if (selectedUser) {
+            document.getElementById('partyAEmail').value = selectedUser.email || '';
+        }
+    });
+
+    // Hàm an toàn để fetch PDF
+    async function openPdfPreview(draftId) {
+        const headers = getAuthHeader();
+        if (!headers) return;
+        
+        statusDiv.textContent = 'Đang tải bản xem trước, vui lòng chờ...';
+        try {
+            const response = await fetch(`${API_BASE_URL}/commitments/preview/${draftId}`, {
+                method: 'GET',
+                headers: headers
+            });
+            
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                const errData = await response.json();
+                throw new Error(errData.message || 'Server trả về lỗi (không phải PDF).');
+            }
+
+            if (!response.ok) throw new Error(`Lỗi HTTP: ${response.status}`);
+            
+            const arrayBuffer = await response.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+            
+            if (blob.size === 0) {
+                throw new Error('PDF tạo ra bị rỗng (0 bytes). Lỗi ở Puppeteer trên Server!');
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            window.open(url, '_blank');
+            statusDiv.textContent = `Tạo bản nháp thành công!\nDraft ID: ${draftId}\nĐã mở tab xem trước PDF.`;
+        } catch (error) {
+            statusDiv.textContent = `Lỗi Preview: ${error.message}`;
+            console.error(error);
+        }
+    }
+
+    // --- Nút 1: Tạo bản nháp ---
+    createBtn.addEventListener('click', async () => {
+        const headers = getAuthHeader();
+        if (!headers) return;
+
+        // Lấy Text của Option đang được chọn cho Bên A
+        const partyASelect = document.getElementById('partyASelect');
+        const selectedPartyAName = partyASelect.options[partyASelect.selectedIndex]?.text || '';
+
+        const body = {
+            partyA: {
+                name: selectedPartyAName,
+                title: document.getElementById('partyATitle').value,
+                office: document.getElementById('partyAOffice').value,
+                email: document.getElementById('partyAEmail').value,
+            },
+            partyB: {
+                name: document.getElementById('partyBName').value,
+                mssv: document.getElementById('partyBMSSV').value,
+                class: document.getElementById('partyBClass').value,
+                email: document.getElementById('partyBEmail').value,
+            },
+            modelType: document.getElementById('modelType').value,
+            commitmentLocation: document.getElementById('commitmentLocation').value,
+        };
+
+        statusDiv.textContent = 'Đang tạo bản nháp...';
+        createBtn.disabled = true;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/commitments/draft`, {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || 'Có lỗi xảy ra khi tạo bản nháp.');
+
+            const draftId = result.data.draftId;
+            draftIdInput.value = draftId;
+
+            previewBtn.disabled = false;
+            finalizeBtn.disabled = false;
+            createBtn.textContent = '1. Tạo lại bản nháp khác'; 
+
+            await openPdfPreview(draftId);
+
+        } catch (error) {
+            statusDiv.textContent = `Lỗi: ${error.message}`;
+        } finally {
+            createBtn.disabled = false;
+        }
+    });
+
+    // --- Nút 2: Xem lại PDF ---
+    previewBtn.addEventListener('click', () => {
+        const draftId = draftIdInput.value;
+        if (draftId) openPdfPreview(draftId);
+    });
+
+    // --- Nút 3: Hoàn tất & Lưu ---
+    finalizeBtn.addEventListener('click', async () => {
+        const draftId = draftIdInput.value;
+        if (!draftId) return;
+        
+        const headers = getAuthHeader();
+        if (!headers) return;
+
+        statusDiv.textContent = 'Đang hoàn tất và tạo file PDF cuối cùng...';
+        finalizeBtn.disabled = true;
+        previewBtn.disabled = true;
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/commitments/finalize/${draftId}` , {
+                method: 'POST',
+                headers: headers
+            });
+
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                const errResult = await response.json();
+                throw new Error(errResult.message || `Lỗi server không xuất được PDF`);
+            }
+
+            if (!response.ok) throw new Error(`Lỗi HTTP: ${response.status}`);
+
+            const arrayBuffer = await response.arrayBuffer();
+            const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
+            
+            if (blob.size === 0) throw new Error('File tải về bị rỗng!');
+
+           const contentDisposition = response.headers.get('content-disposition');
+            let filename = 'Cam_Ket_NCKH.pdf';
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+                if (filenameMatch && filenameMatch.length === 2) {
+                    filename = filenameMatch[1];
+                }
+            }
+
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+
+            statusDiv.textContent = `Hoàn tất! File ${filename} đã tải xuống thành công.`;
+            draftIdInput.value = '';
+            createBtn.textContent = '1. Tạo nháp & Xem trước';
+            previewBtn.disabled = true;
+            finalizeBtn.disabled = true;
+
+        } catch (error) {
+            statusDiv.textContent = `Lỗi Xuất PDF: ${error.message}`;
+        }
+    });
+</script>
+</body>
+</html>
