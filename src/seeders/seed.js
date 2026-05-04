@@ -7,14 +7,19 @@ const {
   Task,
   Milestone,
   WeeklyReport,
+  ForumPost,
+  ForumComment,
+  ForumLike,
   Commitment,
   VerilogProblem,
   VerilogTestCase,
 } = require('../models');
+
 const {
   USER_STATUS, SYSTEM_ROLES, PROJECT_STATUS, PROJECT_ROLES,
   TASK_STATUS, TASK_PRIORITY, REPORT_STATUS,
 } = require('../config/constants');
+
 const { generateRewardSheet } = require('../services/reward.service');
 const logger = require('../utils/logger');
 
@@ -787,6 +792,32 @@ const seed = async () => {
       logger.info(`Created verilog problem: ${def.name} with ${def.testcases.length} test cases`);
     }
     logger.info('Seeded verilog problems');
+
+    // ======== Forum seeded data ========
+    const existingForumPosts = await ForumPost.count();
+    if (existingForumPosts === 0) {
+      const initialPosts = [
+        {
+          title: 'Giới thiệu forum mới',
+          content: 'Hãy sử dụng forum để thảo luận về tiến độ, kỹ thuật và chia sẻ kiến thức.',
+          user: users.leader1,
+        },
+        {
+          title: 'Cách triển khai API mới',
+          content: 'Mọi người bình luận về cách tối ưu hóa backend và query database.',
+          user: users.member1,
+        },
+      ];
+
+      for (const p of initialPosts) {
+        const post = await ForumPost.create({ title: p.title, content: p.content, user_id: p.user.id });
+        await ForumComment.create({ post_id: post.id, user_id: users.member2.id, content: 'Tôi đồng ý, nếu dùng index thì sẽ tốt hơn.' });
+        await ForumLike.create({ post_id: post.id, user_id: users.leader2.id });
+      }
+      logger.info('Seeded forum posts/comments/likes');
+    } else {
+      logger.info('Forum posts already seeded — skipping');
+    }
 
     logger.info('✅  Seeding complete');
     logger.info('');

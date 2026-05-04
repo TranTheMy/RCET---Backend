@@ -54,7 +54,7 @@ const options = {
           type: 'object',
           required: ['token', 'password'],
           properties: {
-            token: { type: 'string', example: 'abc123resettoken' },
+              token: { type: 'string', example: 'abc123resettoken' },
             password: { type: 'string', example: 'NewStrongPass1!' },
           },
         },
@@ -195,6 +195,49 @@ const options = {
             timestamp: { type: 'string', format: 'date-time' },
           },
         },
+        CreateCommentRequest: {
+          type: 'object',
+          required: ['content'],
+          properties: {
+            content: { type: 'string', example: 'Great progress this week! Keep it up.', minLength: 1, maxLength: 1000 },
+          },
+        },
+        UpdateCommentRequest: {
+          type: 'object',
+          required: ['content'],
+          properties: {
+            content: { type: 'string', example: 'Updated comment with corrections.', minLength: 1, maxLength: 1000 },
+          },
+        },
+        CreateForumPostRequest: {
+          type: 'object',
+          required: ['title', 'content'],
+          properties: {
+            title: { type: 'string', example: 'New forum topic', minLength: 3, maxLength: 150 },
+            content: { type: 'string', example: 'Detailed content of the forum post.', minLength: 3, maxLength: 5000 },
+          },
+        },
+        UpdateForumPostRequest: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', example: 'Updated title', minLength: 3, maxLength: 150 },
+            content: { type: 'string', example: 'Updated content', minLength: 3, maxLength: 5000 },
+          },
+        },
+        CreateForumCommentRequest: {
+          type: 'object',
+          required: ['content'],
+          properties: {
+            content: { type: 'string', example: 'Great point, I agree!', minLength: 1, maxLength: 2000 },
+          },
+        },
+        UpdateForumCommentRequest: {
+          type: 'object',
+          required: ['content'],
+          properties: {
+            content: { type: 'string', example: 'Updated reply', minLength: 1, maxLength: 2000 },
+          },
+        },
 
         SuccessResponse: {
           type: 'object',
@@ -222,6 +265,9 @@ const options = {
       { name: 'Members', description: 'Project member management' },
       { name: 'Milestones', description: 'Master plan milestones & timeline' },
       { name: 'Reports', description: 'Weekly progress reports & compliance matrix' },
+      { name: 'Comments', description: 'Comments on weekly reports — leader & members interaction' },
+      { name: 'Forum', description: 'Forum posts, comments and likes for all roles' },
+      { name: 'Member Dashboard', description: 'Personal dashboard for members' },
       { name: 'Git', description: 'Git repository integration (truong_lab only)' },
     ],
     paths: {
@@ -750,6 +796,231 @@ const options = {
         },
       },
 
+      // ======== Comments (on Weekly Reports) ========
+      '/{weeklyReportId}/comments': {
+        get: {
+          tags: ['Comments'],
+          summary: 'Get all comments on a weekly report',
+          description: 'List comments for a specific weekly report. Only project members can access.',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'weeklyReportId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Weekly report ID' },
+          ],
+          responses: {
+            200: { description: 'List of comments with user info' },
+            403: { description: 'Not a project member' },
+            404: { description: 'Weekly report not found' },
+          },
+        },
+        post: {
+          tags: ['Comments'],
+          summary: 'Create comment on weekly report',
+          description: 'Post a new comment on a weekly report. Only project members can comment.',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'weeklyReportId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Weekly report ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateCommentRequest' } } },
+          },
+          responses: {
+            201: { description: 'Comment created successfully' },
+            400: { description: 'Content is required' },
+            403: { description: 'Not a project member' },
+            404: { description: 'Weekly report not found' },
+          },
+        },
+      },
+      '/comments/{commentId}': {
+        put: {
+          tags: ['Comments'],
+          summary: 'Update comment',
+          description: 'Edit comment content. Only the author can update their own comment.',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'commentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Comment ID' },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateCommentRequest' } } },
+          },
+          responses: {
+            200: { description: 'Comment updated successfully' },
+            400: { description: 'Content is required' },
+            403: { description: 'Access denied — not the author' },
+            404: { description: 'Comment not found' },
+          },
+        },
+        delete: {
+          tags: ['Comments'],
+          summary: 'Delete comment',
+          description: 'Remove a comment. Only the author can delete their own comment.',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'commentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' }, description: 'Comment ID' },
+          ],
+          responses: {
+            200: { description: 'Comment deleted successfully' },
+            403: { description: 'Access denied — not the author' },
+            404: { description: 'Comment not found' },
+          },
+        },
+      },
+
+      // ======== Forum ========
+      '/forum/posts': {
+        get: {
+          tags: ['Forum'],
+          summary: 'List forum posts',
+          description: 'Get paginated list of forum posts. Supports optional user filter.',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'user_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Filter by post author' },
+            { name: 'page', in: 'query', schema: { type: 'integer', default: 1 }, description: 'Page number' },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 20 }, description: 'Posts per page' },
+          ],
+          responses: {
+            200: { description: 'Paginated posts list' },
+          },
+        },
+        post: {
+          tags: ['Forum'],
+          summary: 'Create forum post',
+          description: 'Create a new forum post by authenticated user.',
+          security: [{ BearerAuth: [] }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateForumPostRequest' } } },
+          },
+          responses: {
+            201: { description: 'Post created' },
+            400: { description: 'Validation error' },
+          },
+        },
+      },
+      '/forum/posts/{postId}': {
+        get: {
+          tags: ['Forum'],
+          summary: 'Get forum post detail',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: { description: 'Post details with comments and likes' },
+            404: { description: 'Not found' },
+          },
+        },
+        put: {
+          tags: ['Forum'],
+          summary: 'Update forum post',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateForumPostRequest' } } },
+          },
+          responses: {
+            200: { description: 'Updated' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Not found' },
+          },
+        },
+        delete: {
+          tags: ['Forum'],
+          summary: 'Delete forum post',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: { description: 'Deleted' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Not found' },
+          },
+        },
+      },
+      '/forum/posts/{postId}/comments': {
+        post: {
+          tags: ['Forum'],
+          summary: 'Add comment to post',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateForumCommentRequest' } } },
+          },
+          responses: {
+            201: { description: 'Comment created' },
+            404: { description: 'Post not found' },
+          },
+        },
+      },
+      '/forum/comments/{commentId}': {
+        put: {
+          tags: ['Forum'],
+          summary: 'Update comment',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'commentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateForumCommentRequest' } } },
+          },
+          responses: {
+            200: { description: 'Updated' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Not found' },
+          },
+        },
+        delete: {
+          tags: ['Forum'],
+          summary: 'Delete comment',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'commentId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: { description: 'Deleted' },
+            403: { description: 'Forbidden' },
+            404: { description: 'Not found' },
+          },
+        },
+      },
+      '/forum/posts/{postId}/likes': {
+        post: {
+          tags: ['Forum'],
+          summary: 'Like a post',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            201: { description: 'Liked' },
+            404: { description: 'Not found' },
+            409: { description: 'Already liked' },
+          },
+        },
+        delete: {
+          tags: ['Forum'],
+          summary: 'Unlike a post',
+          security: [{ BearerAuth: [] }],
+          parameters: [
+            { name: 'postId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          ],
+          responses: {
+            200: { description: 'Unliked' },
+            404: { description: 'Not found' },
+          },
+        },
+      },
+
       // ======== Git Repo ========
       '/projects/{id}/git': {
         get: {
@@ -794,6 +1065,168 @@ const options = {
             404: { description: 'Project not found' },
           },
         },
+      },
+
+      // ======== Member Dashboard ========
+      '/members/dashboard': {
+        get: {
+          tags: ['Member Dashboard'],
+          summary: 'Get member dashboard data',
+          description: 'Retrieve comprehensive dashboard data for authenticated member',
+          security: [{ BearerAuth: [] }],
+          responses: {
+            200: {
+              description: 'Dashboard data retrieved successfully',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: true },
+                      message: { type: 'string', example: 'Dashboard data retrieved successfully' },
+                      data: {
+                        type: 'object',
+                        properties: {
+                          personal: {
+                            type: 'object',
+                            properties: {
+                              id: { type: 'string', example: 'user-uuid' },
+                              full_name: { type: 'string', example: 'Nguyễn Văn A' },
+                              email: { type: 'string', example: 'nguyenvana@lab.com' },
+                              department: { type: 'string', example: 'Computer Science' },
+                              system_role: { type: 'string', example: 'member' },
+                              joined_at: { type: 'string', format: 'date-time' }
+                            }
+                          },
+                          projects: {
+                            type: 'array',
+                            items: {
+                              type: 'object',
+                              properties: {
+                                id: { type: 'string' },
+                                name: { type: 'string' },
+                                code: { type: 'string' },
+                                role: { type: 'string', enum: ['leader', 'member'] },
+                                joined_at: { type: 'string', format: 'date-time' },
+                                tasks: {
+                                  type: 'object',
+                                  properties: {
+                                    total: { type: 'integer' },
+                                    done: { type: 'integer' },
+                                    in_progress: { type: 'integer' },
+                                    todo: { type: 'integer' },
+                                    overdue: { type: 'integer' }
+                                  }
+                                },
+                                report_rate: { type: 'integer', description: 'Percentage of on-time reports' },
+                                at_risk: { type: 'boolean' },
+                                next_milestones: {
+                                  type: 'array',
+                                  items: {
+                                    type: 'object',
+                                    properties: {
+                                      title: { type: 'string' },
+                                      due_date: { type: 'string', format: 'date-time' },
+                                      done: { type: 'boolean' }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          tasks: {
+                            type: 'object',
+                            properties: {
+                              in_progress: {
+                                type: 'array',
+                                items: {
+                                  type: 'object',
+                                  properties: {
+                                    id: { type: 'string' },
+                                    title: { type: 'string' },
+                                    priority: { type: 'string' },
+                                    due_date: { type: 'string', format: 'date-time' },
+                                    project: {
+                                      type: 'object',
+                                      properties: {
+                                        id: { type: 'string' },
+                                        name: { type: 'string' },
+                                        code: { type: 'string' }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              todo: { type: 'array' },
+                              done_this_week: { type: 'array' },
+                              overdue: { type: 'array' }
+                            }
+                          },
+                          reports: {
+                            type: 'object',
+                            properties: {
+                              history: {
+                                type: 'array',
+                                items: {
+                                  type: 'object',
+                                  properties: {
+                                    week: { type: 'integer' },
+                                    year: { type: 'integer' },
+                                    status: { type: 'string', enum: ['submitted', 'late', 'missing'] },
+                                    submitted_at: { type: 'string', format: 'date-time' },
+                                    due_date: { type: 'string', format: 'date-time' }
+                                  }
+                                }
+                              },
+                              rate: { type: 'integer', description: 'Compliance rate percentage' },
+                              streak: { type: 'integer', description: 'Consecutive on-time weeks' },
+                              next_due: { type: 'string', format: 'date-time' }
+                            }
+                          },
+                          metrics: {
+                            type: 'object',
+                            properties: {
+                              task_completion_rate: { type: 'integer' },
+                              report_submission_rate: { type: 'integer' },
+                              average_completion_time: { type: 'number' },
+                              team_ranking: {
+                                type: 'object',
+                                properties: {
+                                  position: { type: 'integer' },
+                                  total_members: { type: 'integer' },
+                                  percentile: { type: 'integer' }
+                                }
+                              },
+                              achievements: {
+                                type: 'array',
+                                items: { type: 'string' }
+                              }
+                            }
+                          },
+                          activities: {
+                            type: 'array',
+                            items: {
+                              type: 'object',
+                              properties: {
+                                type: { type: 'string', enum: ['task_completed', 'report_submitted'] },
+                                description: { type: 'string' },
+                                project: { type: 'string' },
+                                timestamp: { type: 'string', format: 'date-time' },
+                                icon: { type: 'string' }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            401: { description: 'Unauthorized' },
+            500: { description: 'Internal server error' }
+          }
+        }
       },
     },
   },

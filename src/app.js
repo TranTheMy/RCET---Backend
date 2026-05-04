@@ -22,8 +22,10 @@ const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:5173',
   'http://localhost:5173',
   'http://localhost:5174',
-  'http://localhost:5500', // Cho phép Live Server (localhost)
-  'http://127.0.0.1:5500', // Cho phép Live Server (127.0.0.1)
+  'http://localhost:3000',
+  'http://localhost:5500', // Live Server
+  'http://127.0.0.1:5500', // Live Server (127)
+  'null' // allow file:// origin for local static test page usage
 ];
 const corsOptions = {
   origin: (origin, callback) => {

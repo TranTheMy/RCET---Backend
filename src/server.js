@@ -2,6 +2,11 @@ const app = require('./app');
 const env = require('./config/env');
 const { sequelize } = require('./models');
 const logger = require('./utils/logger');
+
+const http = require('http');
+const socketIo = require('socket.io');
+const realtimeService = require('./services/realtime.service');
+
 const VerilogJudge = require('./services/verilog.judge');
 
 const start = async () => {
@@ -13,6 +18,26 @@ const start = async () => {
     // Sync models
     await sequelize.sync();
     logger.info('Database models synchronized');
+
+    // ===== Create HTTP server =====
+    const server = http.createServer(app);
+
+    // ===== Socket.IO =====
+    const io = socketIo(server, {
+      cors: {
+        origin: [
+          env.clientUrl || "http://localhost:3000",
+          "http://localhost:5173",
+          "http://localhost:5174",
+          "http://localhost:3000",
+          "null"
+        ],
+        methods: ["GET", "POST"],
+        credentials: true
+      }
+    });
+
+    realtimeService.init(io);
 
     // ===== Verilog Judge =====
     try {
@@ -45,9 +70,10 @@ const start = async () => {
       logger.info(`Test user '${testUserEmail}' created with password 'password123'.`);
     }
 
-    // Start server
-    app.listen(env.port, () => {
+    // ===== Start server =====
+    server.listen(env.port, () => {
       logger.info(`Server running on port ${env.port} in ${env.nodeEnv} mode`);
+      logger.info('WebSocket realtime updates enabled');
     });
 
   } catch (error) {

@@ -1,5 +1,6 @@
 const projectService = require('../services/project.service');
 const ApiResponse = require('../utils/response');
+const realtimeService = require('../services/realtime.service');
 
 // ======== Projects ========
 
@@ -50,6 +51,12 @@ const getProjectDetail = async (req, res, next) => {
 const updateProject = async (req, res, next) => {
   try {
     const result = await projectService.updateProject(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'project_updated', {
+      project: result
+    });
+
     return ApiResponse.success(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -87,6 +94,23 @@ const listTasks = async (req, res, next) => {
 const createTask = async (req, res, next) => {
   try {
     const result = await projectService.createTask(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'task_created', {
+      task: result,
+      createdBy: req.user.id
+    });
+
+    // Notify assignee if different from creator
+    if (result.assignee_id && result.assignee_id !== req.user.id) {
+      realtimeService.sendNotification(result.assignee_id, {
+        title: 'New Task Assigned',
+        message: `You have been assigned to task: ${result.title}`,
+        type: 'task_assigned',
+        data: { taskId: result.id, projectId: req.params.id }
+      });
+    }
+
     return ApiResponse.created(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -97,6 +121,28 @@ const createTask = async (req, res, next) => {
 const updateTask = async (req, res, next) => {
   try {
     const result = await projectService.updateTask(req.params.id, req.params.taskId, req.body, req.user);
+
+    // Broadcast realtime update to project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'task_updated', {
+      task: result,
+      updatedBy: req.user.id
+    });
+
+    // Notify assignee if status changed or reassigned
+    if (result.assignee_id && result.assignee_id !== req.user.id) {
+      const notificationType = req.body.status ? 'task_status_changed' : 'task_updated';
+      const message = req.body.status
+        ? `Task "${result.title}" status changed to ${result.status}`
+        : `Task "${result.title}" has been updated`;
+
+      realtimeService.sendNotification(result.assignee_id, {
+        title: 'Task Updated',
+        message: message,
+        type: notificationType,
+        data: { taskId: result.id, projectId: req.params.id }
+      });
+    }
+
     return ApiResponse.success(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -129,6 +175,12 @@ const listMembers = async (req, res, next) => {
 const addMember = async (req, res, next) => {
   try {
     const result = await projectService.addMember(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'member_added', {
+      member: result
+    });
+
     return ApiResponse.created(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -139,6 +191,13 @@ const addMember = async (req, res, next) => {
 const removeMember = async (req, res, next) => {
   try {
     const result = await projectService.removeMember(req.params.id, req.params.memberId, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'member_removed', {
+      removedMemberId: req.params.memberId,
+      removedBy: req.user.id
+    });
+
     return ApiResponse.success(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -161,6 +220,12 @@ const listMilestones = async (req, res, next) => {
 const createMilestone = async (req, res, next) => {
   try {
     const result = await projectService.createMilestone(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'milestone_created', {
+      milestone: result
+    });
+
     return ApiResponse.created(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -171,6 +236,12 @@ const createMilestone = async (req, res, next) => {
 const updateMilestone = async (req, res, next) => {
   try {
     const result = await projectService.updateMilestone(req.params.id, req.params.milestoneId, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'milestone_updated', {
+      milestone: result
+    });
+
     return ApiResponse.success(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -209,6 +280,13 @@ const getComplianceMatrix = async (req, res, next) => {
 const createReport = async (req, res, next) => {
   try {
     const result = await projectService.createReport(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'report_created', {
+      report: result.report,
+      submittedBy: result.submittedBy
+    });
+
     return ApiResponse.created(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);
@@ -231,6 +309,12 @@ const getGitRepo = async (req, res, next) => {
 const updateGitRepo = async (req, res, next) => {
   try {
     const result = await projectService.updateGitRepo(req.params.id, req.body, req.user);
+
+    // Broadcast realtime update to all project members
+    realtimeService.broadcastProjectUpdate(req.params.id, 'git_repo_updated', {
+      gitRepo: result
+    });
+
     return ApiResponse.success(res, result);
   } catch (error) {
     if (error.status) return ApiResponse.error(res, error.message, error.status);

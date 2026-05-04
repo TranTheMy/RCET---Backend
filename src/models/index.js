@@ -8,6 +8,10 @@ const Task = require('./Task');
 const Milestone = require('./Milestone');
 const MilestoneTask = require('./MilestoneTask');
 const WeeklyReport = require('./WeeklyReport');
+const Comment = require('./Comment');
+const ForumPost = require('./ForumPost');
+const ForumComment = require('./ForumComment');
+const ForumLike = require('./ForumLike');
 
 // ===== Verilog + Notification =====
 const VerilogProblem = require('./VerilogProblem');
@@ -30,6 +34,7 @@ User.hasMany(AuditLog, { foreignKey: 'performed_by', as: 'performedAudits' });
 User.hasMany(AuditLog, { foreignKey: 'target_user_id', as: 'targetAudits' });
 AuditLog.belongsTo(User, { foreignKey: 'performed_by', as: 'performer' });
 AuditLog.belongsTo(User, { foreignKey: 'target_user_id', as: 'target' });
+
 
 // ======== Project Associations ========
 Project.belongsTo(User, { foreignKey: 'leader_id', as: 'leader' });
@@ -75,6 +80,26 @@ Project.hasMany(WeeklyReport, { foreignKey: 'project_id', as: 'weeklyReports' })
 WeeklyReport.belongsTo(Project, { foreignKey: 'project_id', as: 'project' });
 WeeklyReport.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
 User.hasMany(WeeklyReport, { foreignKey: 'user_id', as: 'authoredWeeklyReports' });
+
+// WeeklyReport <-> Comments
+WeeklyReport.hasMany(Comment, { foreignKey: 'weekly_report_id', as: 'comments' });
+Comment.belongsTo(WeeklyReport, { foreignKey: 'weekly_report_id', as: 'weeklyReport' });
+Comment.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(Comment, { foreignKey: 'user_id', as: 'comments' });
+
+// ===== Forum =====
+ForumPost.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
+User.hasMany(ForumPost, { foreignKey: 'user_id', as: 'forumPosts' });
+
+ForumPost.hasMany(ForumComment, { foreignKey: 'post_id', as: 'comments' });
+ForumComment.belongsTo(ForumPost, { foreignKey: 'post_id', as: 'post' });
+ForumComment.belongsTo(User, { foreignKey: 'user_id', as: 'author' });
+User.hasMany(ForumComment, { foreignKey: 'user_id', as: 'forumComments' });
+
+ForumPost.hasMany(ForumLike, { foreignKey: 'post_id', as: 'likes' });
+ForumLike.belongsTo(ForumPost, { foreignKey: 'post_id', as: 'post' });
+ForumLike.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+User.hasMany(ForumLike, { foreignKey: 'user_id', as: 'forumLikes' });
 
 // ===== Verilog =====
 VerilogProblem.belongsTo(User, { foreignKey: 'owner_id', as: 'owner' });
@@ -128,6 +153,10 @@ const db = {
   Milestone,
   MilestoneTask,
   WeeklyReport,
+  Comment,
+  ForumPost,
+  ForumComment,
+  ForumLike,
   VerilogProblem,
   VerilogTestCase,
   VerilogSubmission,
