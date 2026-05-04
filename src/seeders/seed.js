@@ -1,12 +1,26 @@
 const bcrypt = require('bcryptjs');
 const {
-  sequelize, User, Project, ProjectMember, Task, Milestone, WeeklyReport,
-  ForumPost, ForumComment, ForumLike,
+  sequelize,
+  User,
+  Project,
+  ProjectMember,
+  Task,
+  Milestone,
+  WeeklyReport,
+  ForumPost,
+  ForumComment,
+  ForumLike,
+  Commitment,
+  VerilogProblem,
+  VerilogTestCase,
 } = require('../models');
+
 const {
   USER_STATUS, SYSTEM_ROLES, PROJECT_STATUS, PROJECT_ROLES,
   TASK_STATUS, TASK_PRIORITY, REPORT_STATUS,
 } = require('../config/constants');
+
+const { generateRewardSheet } = require('../services/reward.service');
 const logger = require('../utils/logger');
 
 const SALT_ROUNDS = 10;
@@ -142,6 +156,9 @@ const seed = async () => {
     logger.info('Database connected for seeding');
     await sequelize.sync();
 
+    // Ensure commitment_location exists for backward compatibility
+    await sequelize.query("IF COL_LENGTH('Commitments','commitment_location') IS NULL BEGIN ALTER TABLE Commitments ADD commitment_location NVARCHAR(255) NULL END");
+
     // ── 1. Users ──────────────────────────────────────────────────────────────
     const users = {};
     for (const def of USER_DEFS) {
@@ -275,6 +292,64 @@ const seed = async () => {
         });
       }
     }
+
+    // ── 2.5. Commitments (sample data) ─────────────────────────────────────────
+    const commitmentDefs = [
+      {
+        userKey: 'member1',
+        partyA_email: users.truong_lab.email, // Corrected email
+        modelType: 1,
+        partyA_name: 'Trần Thị Lab',
+        partyB_name: 'Hoàng Văn An',
+        partyB_mssv: users.member1.student_code,
+      },
+      {
+        userKey: 'member2',
+        partyA_email: users.truong_lab.email, // Corrected email
+        modelType: 2,
+        partyA_name: 'Trần Thị Lab',
+        partyB_name: 'Nguyễn Hải Yến',
+        partyB_mssv: users.member2.student_code,
+      },
+      {
+        userKey: 'leader1',
+        partyA_email: users.vien_truong.email, // Corrected email
+        modelType: 3,
+        partyA_name: 'Nguyễn Văn Viện',
+        partyB_name: 'Lê Minh Khoa',
+        partyB_mssv: users.leader1.student_code,
+      },
+    ];
+
+    for (const def of commitmentDefs) {
+      const user = users[def.userKey];
+      if (!user) continue;
+
+      const [commitment, created] = await Commitment.findOrCreate({
+        where: { user_id: user.id, model_type: def.modelType },
+        defaults: {
+          user_id: user.id,
+          party_a_email: def.partyA_email,
+          model_type: def.modelType,
+          party_a_name: def.partyA_name,
+          party_b_name: def.partyB_name,
+          party_b_mssv: def.partyB_mssv,
+          created_at: new Date(),
+        },
+      });
+
+      if (created) {
+        logger.info(`Created commitment for ${def.partyB_name}`);
+      } else {
+        // Ensure existing records have the correct email
+        if (commitment.party_a_email !== def.partyA_email) {
+          commitment.party_a_email = def.partyA_email;
+          await commitment.save();
+          logger.info(`Updated commitment for ${def.partyB_name}`);
+        }
+      }
+    }
+    logger.info('Seeded and corrected commitments.');
 
     // ── 3. Tasks ──────────────────────────────────────────────────────────────
     const taskDefs = [
@@ -475,73 +550,248 @@ const seed = async () => {
     }
     logger.info('Seeded milestones');
 
-    // ── 5. Weekly Reports ─────────────────────────────────────────────────────
-    // Generate 8 weeks of reports for active projects
-    const activeProjects = [
-      { pKey: 'roboarm', memberKeys: ['leader1', 'member1', 'member2', 'member3'] },
-      { pKey: 'aivision', memberKeys: ['leader2', 'member2', 'member4'] },
+    // ── 5. Weekly Reports & Reward Module Test Data (March 2024) ──────────────
+    logger.info('Seeding data for Reward Module test cases...');
+
+    /**
+     * Calculates a 4-week (28-day) cycle for a given month and year.
+     * It starts from the first Monday of the month.
+     * @param {number} month - The month (1-12).
+     * @param {number} year - The year.
+     * @returns {{startDate: Date, endDate: Date}}
+     */
+    function getFourWeekCycle(month, year) {
+      const firstDayOfMonth = new Date(year, month - 1, 1);
+      const dayOfWeek = firstDayOfMonth.getDay(); // 0=Sun, 1=Mon, ...
+      // Find the first Monday. If the 1st is a Sunday (0), add 1 day. If it's a Tuesday (2), add 6 days.
+      const daysToAdd = (8 - dayOfWeek) % 7;
+      const startDate = new Date(year, month - 1, 1 + daysToAdd);
+      const endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 27); // 4 weeks = 28 days, so end date is 27 days after start
+      return { startDate, endDate };
+    }
+
+    const testYear = 2024;
+    const testMonth = 3; // March
+    const cycle = getFourWeekCycle(testMonth, testYear);
+
+    // --- User 1 (member1): 1 late report, 1 late task ---
+    const user1 = users.member1;
+    // Create 4 weekly reports for March, one of them is LATE
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user1.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.roboarm.id,
+          user_id: user1.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: i === 1 ? REPORT_STATUS.LATE : REPORT_STATUS.SUBMITTED, // The second report is late
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: i === 1 ? new Date(reportDueDate.getTime() + 24 * 60 * 60 * 1000) : new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} cho dự án RoboArm.`,
+        },
+      });
+    }
+    // Create one late task in March
+    await Task.findOrCreate({
+      where: { assignee_id: user1.id, title: 'Test Task - Late' },
+      defaults: {
+        project_id: projects.roboarm.id,
+        title: 'Test Task - Late',
+        assignee_id: user1.id,
+        created_by: users.leader1.id,
+        due_date: new Date(cycle.startDate.getTime() + 10 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10), // Due in the cycle
+        status: TASK_STATUS.DONE, // It's done...
+        updated_at: new Date(cycle.startDate.getTime() + 12 * 24 * 60 * 60 * 1000), // ...but updated 2 days after due date
+      },
+    });
+
+    // --- User 2 (member2): 2 late reports, 3 late tasks (3 strikes) ---
+    const user2 = users.member2;
+    // Create 4 weekly reports, two are LATE
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user2.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.aivision.id,
+          user_id: user2.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: (i === 1 || i === 3) ? REPORT_STATUS.LATE : REPORT_STATUS.SUBMITTED,
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: (i === 1 || i === 3) ? new Date(reportDueDate.getTime() + 24 * 60 * 60 * 1000) : new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} cho dự án AIVision.`,
+        },
+      });
+    }
+    // Create 3 late tasks to trigger the 3-strikes rule
+    for (let i = 0; i < 3; i++) {
+      await Task.findOrCreate({
+        where: { assignee_id: user2.id, title: `Strike Task ${i + 1}` },
+        defaults: {
+          project_id: projects.aivision.id,
+          title: `Strike Task ${i + 1}`,
+          assignee_id: user2.id,
+          created_by: users.leader2.id,
+          due_date: new Date(cycle.startDate.getTime() + (5 + i * 2) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+          status: TASK_STATUS.TODO, // Still not done, so it's late
+        },
+      });
+    }
+
+    // --- User 3 (leader1): Perfect record ---
+    const user3 = users.leader1;
+    for (let i = 0; i < 4; i++) {
+      const reportDate = new Date(cycle.startDate);
+      reportDate.setDate(reportDate.getDate() + i * 7);
+      const reportWeek = isoWeek(reportDate);
+      const reportYear = reportDate.getFullYear();
+      const reportDueDate = weekSunday(reportDate);
+
+      await WeeklyReport.findOrCreate({
+        where: { user_id: user3.id, year: reportYear, week_number: reportWeek },
+        defaults: {
+          project_id: projects.roboarm.id,
+          user_id: user3.id,
+          week_number: reportWeek,
+          year: reportYear,
+          status: REPORT_STATUS.SUBMITTED,
+          due_date: reportDueDate.toISOString().slice(0, 10),
+          submitted_at: new Date(reportDueDate.getTime() - 24 * 60 * 60 * 1000),
+          content: `Báo cáo tuần ${reportWeek} của Leader.`,
+        },
+      });
+    }
+
+    logger.info('Finished seeding reward module test data.');
+
+    // ── 7. Verilog Problems & Test Cases ─────────────────────────────────
+    const verilogProblemDefs = [
+      {
+        key: 'hello_verilog',
+        name: 'Hello Verilog',
+        description: 'Bài tập cơ bản nhất: gán đầu ra bằng đầu vào.\n\nViết một module Verilog nhận một tín hiệu đầu vào và gán trực tiếp cho đầu ra.',
+        description_input: 'input wire in',
+        description_output: 'output wire out',
+        level: 'easy',
+        tags: 'combinational,basic',
+        template_code: 'module hello_verilog(\n    input wire in,\n    output wire out\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Input 0', input: 'in=0', expected_output: 'out=0', grade: 5, order_index: 0 },
+          { name: 'Input 1', input: 'in=1', expected_output: 'out=1', grade: 5, order_index: 1 },
+        ],
+      },
+      {
+        key: 'and_gate',
+        name: 'AND Gate',
+        description: 'Thiết kế cổng AND 2 đầu vào.\n\nModule nhận 2 tín hiệu đầu vào a, b và xuất kết quả phép AND ra đầu ra y.',
+        description_input: 'input wire a, b',
+        description_output: 'output wire y',
+        level: 'easy',
+        tags: 'combinational,gate',
+        template_code: 'module and_gate(\n    input wire a,\n    input wire b,\n    output wire y\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'a=0,b=0', input: 'a=0,b=0', expected_output: 'y=0', grade: 5, order_index: 0 },
+          { name: 'a=0,b=1', input: 'a=0,b=1', expected_output: 'y=0', grade: 5, order_index: 1 },
+          { name: 'a=1,b=0', input: 'a=1,b=0', expected_output: 'y=0', grade: 5, order_index: 2 },
+          { name: 'a=1,b=1', input: 'a=1,b=1', expected_output: 'y=1', grade: 5, order_index: 3 },
+        ],
+      },
+      {
+        key: 'adder_4bit',
+        name: '4-bit Adder',
+        description: 'Thiết kế bộ cộng 4-bit.\n\nModule nhận hai số 4-bit a và b, xuất tổng sum (4-bit) và carry out cout.',
+        description_input: 'input wire [3:0] a, b',
+        description_output: 'output wire [3:0] sum\noutput wire cout',
+        level: 'medium',
+        tags: 'combinational,arithmetic',
+        template_code: 'module adder_4bit(\n    input wire [3:0] a,\n    input wire [3:0] b,\n    output wire [3:0] sum,\n    output wire cout\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: '0+0', input: 'a=0000,b=0000', expected_output: 'sum=0000,cout=0', grade: 5, order_index: 0 },
+          { name: '3+4', input: 'a=0011,b=0100', expected_output: 'sum=0111,cout=0', grade: 5, order_index: 1 },
+          { name: '15+1', input: 'a=1111,b=0001', expected_output: 'sum=0000,cout=1', grade: 10, order_index: 2 },
+          { name: '7+8', input: 'a=0111,b=1000', expected_output: 'sum=1111,cout=0', grade: 10, order_index: 3 },
+        ],
+      },
+      {
+        key: 'dff',
+        name: 'D Flip-Flop',
+        description: 'Thiết kế D Flip-Flop cơ bản với clock và reset.\n\nModule lưu giá trị đầu vào D vào thanh ghi khi có cạnh lên clock. Reset đồng bộ đưa đầu ra Q về 0.',
+        description_input: 'input wire clk, rst, d',
+        description_output: 'output reg q',
+        level: 'medium',
+        tags: 'sequential,flip-flop',
+        template_code: 'module dff(\n    input wire clk,\n    input wire rst,\n    input wire d,\n    output reg q\n);\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Reset', input: 'clk=1,rst=1,d=1', expected_output: 'q=0', grade: 10, order_index: 0 },
+          { name: 'Load 1', input: 'clk=1,rst=0,d=1', expected_output: 'q=1', grade: 10, order_index: 1 },
+          { name: 'Load 0', input: 'clk=1,rst=0,d=0', expected_output: 'q=0', grade: 10, order_index: 2 },
+        ],
+      },
+      {
+        key: 'fsm_traffic',
+        name: 'FSM Traffic Light',
+        description: 'Thiết kế bộ điều khiển đèn giao thông bằng máy trạng thái hữu hạn (FSM).\n\nModule có 3 trạng thái: GREEN (00), YELLOW (01), RED (10). Chuyển trạng thái theo chu kỳ clock.',
+        description_input: 'input wire clk, rst',
+        description_output: 'output reg [1:0] light',
+        level: 'hard',
+        tags: 'sequential,fsm',
+        template_code: 'module fsm_traffic_light(\n    input wire clk,\n    input wire rst,\n    output reg [1:0] light\n);\n    // States: GREEN=00, YELLOW=01, RED=10\n    // Code here\nendmodule',
+        testcases: [
+          { name: 'Reset to GREEN', input: 'clk=1,rst=1', expected_output: 'light=00', grade: 10, order_index: 0 },
+          { name: 'GREEN->YELLOW', input: 'clk=1,rst=0', expected_output: 'light=01', grade: 15, order_index: 1 },
+          { name: 'YELLOW->RED', input: 'clk=1,rst=0', expected_output: 'light=10', grade: 15, order_index: 2 },
+        ],
+      },
     ];
 
-    const now = new Date();
-    const currentWeek = isoWeek(now);
-    const currentYear = now.getFullYear();
-
-    for (const { pKey, memberKeys } of activeProjects) {
-      const project = projects[pKey];
-      if (!project) continue;
-
-      for (let wOffset = 7; wOffset >= 1; wOffset--) {
-        const reportDate = weeksAgo(wOffset);
-        const wNum = isoWeek(reportDate);
-        const wYear = reportDate.getFullYear();
-        const due = weekSunday(reportDate);
-        const isCurrentWeek = wNum === currentWeek && wYear === currentYear;
-
-        for (const mKey of memberKeys) {
-          const user = users[mKey];
-          if (!user) continue;
-
-          const existing = await WeeklyReport.findOne({
-            where: {
-              project_id: project.id,
-              user_id: user.id,
-              week_number: wNum,
-              year: wYear,
-            },
-          });
-          if (existing) continue;
-
-          // Simulate some missing/late reports for realism
-          // member3 misses every 4th week; member4 submits late every 3rd week
-          const skip = (mKey === 'member3' && wOffset % 4 === 0);
-          if (skip) continue; // missing
-
-          const submitDate = new Date(due);
-          let status;
-          if (mKey === 'member4' && wOffset % 3 === 0) {
-            // late: submit 2 days after due
-            submitDate.setDate(due.getDate() + 2);
-            status = REPORT_STATUS.LATE;
-          } else {
-            // on time: submit 1 day before due
-            submitDate.setDate(due.getDate() - 1);
-            status = isCurrentWeek ? REPORT_STATUS.SUBMITTED : REPORT_STATUS.SUBMITTED;
-          }
-
-          await WeeklyReport.create({
-            project_id: project.id,
-            user_id: user.id,
-            week_number: wNum,
-            year: wYear,
-            content: `Báo cáo tuần ${wNum}/${wYear} của ${user.full_name}:\n- Hoàn thành các task được giao.\n- Gặp khó khăn về: cần hỗ trợ thêm.\n- Kế hoạch tuần tới: tiếp tục sprint hiện tại.`,
-            status,
-            submitted_at: submitDate,
-            due_date: due.toISOString().slice(0, 10),
-          });
-        }
+    for (const def of verilogProblemDefs) {
+      const exists = await VerilogProblem.findOne({ where: { name: def.name } });
+      if (exists) {
+        logger.info(`Verilog problem "${def.name}" already exists — skipping`);
+        continue;
       }
+      const problem = await VerilogProblem.create({
+        name: def.name,
+        description: def.description,
+        description_input: def.description_input,
+        description_output: def.description_output,
+        level: def.level,
+        tags: def.tags,
+        template_code: def.template_code,
+        testbench_type: 'auto_generated',
+        owner_id: users.truong_lab.id,
+        is_published: true,
+      });
+      for (const tc of def.testcases) {
+        await VerilogTestCase.create({
+          problem_id: problem.id,
+          name: tc.name,
+          type: 'SIM',
+          grade: tc.grade,
+          input: tc.input,
+          expected_output: tc.expected_output,
+          time_limit: 60,
+          mem_limit: 128,
+          order_index: tc.order_index,
+        });
+      }
+      logger.info(`Created verilog problem: ${def.name} with ${def.testcases.length} test cases`);
     }
-    logger.info('Seeded weekly reports');
+    logger.info('Seeded verilog problems');
 
     // ======== Forum seeded data ========
     const existingForumPosts = await ForumPost.count();

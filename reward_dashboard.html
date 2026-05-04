@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RCET - Bảng Tính Thưởng Chi Tiết</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .modal { display: none; }
+        .modal.active { display: flex; }
+        /* Hiệu ứng loading nhẹ */
+        .loading-shimmer {
+            animation: shimmer 2s infinite linear;
+            background: linear-gradient(to right, #f6f7f8 4%, #edeef1 25%, #f6f7f8 36%);
+            background-size: 1000px 100%;
+        }
+        @keyframes shimmer { 0% { background-position: -1000px 0 } 100% { background-position: 1000px 0 } }
+    </style>
+</head>
+<body class="bg-slate-50 text-gray-800 p-4 md:p-8 min-h-screen">
+
+    <div class="max-w-7xl mx-auto">
+        
+        <div class="mb-4">
+            <a href="portal.html" class="text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 transition">
+                <span>&larr;</span> Quay lại danh sách dự án
+            </a>
+        </div>
+
+        <div class="bg-white p-6 rounded-t-lg shadow-sm border-b-4 border-indigo-600 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">Bảng Tính Thưởng Dự Án</h1>
+                <div class="flex items-center gap-3 mt-1">
+                    <p class="text-sm text-gray-500">Dự án: <span id="displayProjectId" class="font-mono font-semibold text-gray-700">Đang tải...</span></p>
+                    <span class="text-gray-300">|</span>
+                    <p class="text-sm text-gray-500">Trạng thái: <span id="sheetStatus" class="font-bold px-2 py-0.5 rounded bg-gray-100 text-gray-600">...</span></p>
+                </div>
+            </div>
+            
+            <div class="flex gap-3 items-center w-full md:w-auto">
+                <button onclick="recalculateSheet()" id="recalcBtn" class="flex-1 md:flex-none bg-orange-100 hover:bg-orange-200 text-orange-700 px-4 py-2 rounded font-semibold transition hidden border border-orange-200">
+                    🔄 Tính toán lại
+                </button>
+                <button onclick="finalizeSheet()" id="finalizeBtn" class="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded font-semibold transition hidden shadow-sm">
+                    ✅ Chốt sổ (Finalize)
+                </button>
+            </div>
+        </div>
+
+        <div id="statusAlert" class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4 hidden shadow-sm">
+            <p id="statusMsg" class="text-sm font-medium text-blue-700"></p>
+        </div>
+
+        <div class="bg-white rounded-b-lg shadow-sm overflow-x-auto border border-t-0 border-gray-100">
+            <table class="min-w-full text-sm text-left border-collapse">
+                <thead class="bg-gray-50 text-gray-700 border-b">
+                    <tr>
+                        <th class="py-4 px-4 font-semibold">Tên User</th>
+                        <th class="py-4 px-4 font-semibold">Vai trò</th>
+                        <th class="py-4 px-4 font-semibold">Base Share</th>
+                        <th class="py-4 px-4 font-semibold">Model Cut</th>
+                        <th class="py-4 px-4 font-semibold text-center">Hệ số Báo cáo</th>
+                        <th class="py-4 px-4 font-semibold text-red-600 text-center">Phạt Task</th>
+                        <th class="py-4 px-4 font-semibold text-orange-600 text-right">Thuế (10%)</th>
+                        <th class="py-4 px-4 font-semibold text-green-600 text-right">Thực nhận (Net)</th>
+                        <th class="py-4 px-4 font-semibold bg-indigo-50" id="overrideColHeader" style="display: none;">Điều chỉnh tay (VNĐ)</th>
+                        <th class="py-4 px-4 font-semibold text-center">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody id="rewardTableBody" class="divide-y divide-gray-100">
+                    <tr><td colspan="10" class="p-8 text-center text-gray-400 font-medium">Đang tải dữ liệu...</td></tr>
+                </tbody>
+            </table>
+            <div class="p-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3 items-center rounded-b-lg">
+                <input type="file" id="importFile" accept=".xlsx" class="hidden" onchange="handleImport(event)">
+                
+                <button onclick="document.getElementById('importFile').click()" id="importBtn" style="display: none;" class="bg-white border border-gray-300 hover:bg-gray-100 text-gray-700 px-4 py-2 rounded-md font-semibold transition shadow-sm">
+                    📤 Import Sửa Tiền
+                </button>
+                
+                <button onclick="handleExport()" id="exportBtn" style="display: none;" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md font-semibold transition shadow-sm">
+                    📥 Xuất Excel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="infoModal" class="modal fixed inset-0 bg-gray-900 bg-opacity-60 items-center justify-center z-50 transition-opacity">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-md w-full transform scale-100 transition-transform">
+            <div class="flex justify-between items-center mb-4 border-b pb-3">
+                <h3 class="text-xl font-bold text-gray-800">Chi tiết Giải trình</h3>
+                <button onclick="closeModal('infoModal')" class="text-gray-400 hover:text-gray-600 font-bold text-xl">&times;</button>
+            </div>
+            
+            <div id="modalContent" class="text-sm space-y-4 max-h-96 overflow-y-auto pr-2 custom-scrollbar"></div>
+            
+            <button onclick="closeModal('infoModal')" class="mt-6 w-full bg-gray-100 hover:bg-gray-200 text-gray-800 font-semibold py-2.5 rounded-lg transition">
+                Đóng
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. CẤU HÌNH & BIẾN TOÀN CỤC
+        // ==========================================
+        const API_URL = 'http://localhost:3000/api/rewards';
+        let currentSheetData = null; 
+        let userRole = null; 
+        let currentProjectId = null;
+        let jwtToken = null;
+
+        // ==========================================
+        // 2. TỰ ĐỘNG KHỞI CHẠY (BOOTSTRAP)
+        // ==========================================
+        window.onload = () => {
+            // Lấy Token từ LocalStorage (Được lưu bởi trang portal.html)
+            jwtToken = localStorage.getItem('rcet_token');
+            if (!jwtToken) {
+                alert("Bạn chưa đăng nhập hoặc phiên làm việc đã hết hạn!");
+                window.location.href = 'portal.html';
+                return;
+            }
+
+            // Giải mã Token để lấy Role
+            userRole = getUserRoleFromToken(jwtToken);
+
+            // Lấy ID Dự án từ URL
+            const urlParams = new URLSearchParams(window.location.search);
+            currentProjectId = urlParams.get('projectId');
+            
+            if (!currentProjectId) {
+                alert("Không tìm thấy ID Dự án trên URL!");
+                window.location.href = 'portal.html';
+                return;
+            }
+
+            // Hiển thị ID lên UI
+            document.getElementById('displayProjectId').textContent = currentProjectId;
+            
+            // Tải dữ liệu ngay lập tức
+            loadData();
+        };
+
+        // ==========================================
+        // 3. UTILS & HELPERS
+        // ==========================================
+        function getHeaders() {
+            return {
+                'Authorization': `Bearer ${jwtToken}`,
+                'Content-Type': 'application/json'
+            };
+        }
+
+        function getUserRoleFromToken(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                return payload.system_role || payload.role; 
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function showStatus(msg, type = 'info') {
+            const alertBox = document.getElementById('statusAlert');
+            const msgEl = document.getElementById('statusMsg');
+            alertBox.classList.remove('hidden', 'bg-blue-50', 'border-blue-500', 'bg-red-50', 'border-red-500', 'bg-green-50', 'border-green-500');
+            msgEl.classList.remove('text-blue-700', 'text-red-700', 'text-green-700');
+
+            if (type === 'error') {
+                alertBox.classList.add('bg-red-50', 'border-red-500');
+                msgEl.classList.add('text-red-700');
+            } else if (type === 'success') {
+                alertBox.classList.add('bg-green-50', 'border-green-500');
+                msgEl.classList.add('text-green-700');
+            } else {
+                alertBox.classList.add('bg-blue-50', 'border-blue-500');
+                msgEl.classList.add('text-blue-700');
+            }
+            
+            msgEl.textContent = msg;
+            alertBox.classList.remove('hidden');
+            
+            // Tự ẩn sau 5 giây nếu là success
+            if(type === 'success') setTimeout(() => alertBox.classList.add('hidden'), 5000);
+        }
+
+        const formatVND = (num) => new Intl.NumberFormat('vi-VN').format(num || 0) + ' đ';
+
+        // ==========================================
+        // 4. CALL API & RENDER TABLE
+        // ==========================================
+        async function loadData() {
+            try {
+                showStatus('Đang tải dữ liệu bảng lương...', 'info');
+                
+                const res = await fetch(`${API_URL}/project/${currentProjectId}`, { headers: getHeaders() });
+                const json = await res.json();
+
+                if (!res.ok) throw new Error(json.message || 'Lỗi khi tải dữ liệu từ server.');
+                
+                currentSheetData = json.data;
+                renderTable();
+                
+                document.getElementById('statusAlert').classList.add('hidden'); // Ẩn thông báo đang tải
+
+            } catch (err) {
+                showStatus(err.message, 'error');
+                document.getElementById('rewardTableBody').innerHTML = `<tr><td colspan="10" class="p-8 text-center text-red-500 font-medium">Lỗi: ${err.message}</td></tr>`;
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('rewardTableBody');
+            const isDirector = userRole === 'vien_truong';
+            const isDraft = currentSheetData.status === 'DRAFT';
+            
+            // UI Toggle cho Viện Trưởng
+            document.getElementById('finalizeBtn').style.display = (isDirector && isDraft) ? 'block' : 'none';
+            document.getElementById('recalcBtn').style.display = (isDirector && isDraft) ? 'block' : 'none';
+            document.getElementById('overrideColHeader').style.display = isDirector ? 'table-cell' : 'none';
+            
+            // ==========================================================
+            // 👇 BƯỚC 2 ĐƯỢC CHÈN VÀO ĐÂY: UI Toggle cho nút Excel ở cuối bảng
+            // ==========================================================
+            const importBtn = document.getElementById('importBtn');
+            const exportBtn = document.getElementById('exportBtn');
+            
+            if (importBtn) importBtn.style.display = (isDirector && isDraft) ? 'block' : 'none';
+            if (exportBtn) exportBtn.style.display = currentSheetData ? 'block' : 'none';
+            // ==========================================================
+            
+            // Hiển thị Status UI đẹp mắt
+            const statusBadge = document.getElementById('sheetStatus');
+            statusBadge.textContent = currentSheetData.status;
+            statusBadge.className = isDraft 
+                ? "font-bold px-2 py-1 rounded bg-yellow-100 text-yellow-700 text-xs" 
+                : "font-bold px-2 py-1 rounded bg-green-100 text-green-700 text-xs";
+
+            tbody.innerHTML = '';
+
+            if(!currentSheetData.details || currentSheetData.details.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" class="p-8 text-center text-gray-500">Chưa có chi tiết dữ liệu. Vui lòng bấm Tính toán lại.</td></tr>`;
+                return;
+            }
+
+            currentSheetData.details.forEach(row => {
+                // 🌟 Trích xuất dữ liệu Thuế từ metadata
+                let meta = {};
+                try { meta = JSON.parse(row.penalty_metadata || '{}'); } catch(e){}
+                const taxAmount = meta.tax_amount || 0;
+                const isKicked = meta.is_kicked || false;
+
+                const tr = document.createElement('tr');
+                tr.className = `hover:bg-indigo-50/50 transition border-b group ${isKicked ? 'bg-red-50/40 opacity-70' : ''}`;
+                
+                // Trạng thái khiếu nại (Appeal Status) UI
+                let appealBadge = '';
+                if (row.appeal_status === 'PENDING') appealBadge = `<div class="mt-1"><span class="bg-red-100 text-red-700 text-[10px] px-1.5 py-0.5 rounded font-bold uppercase">Đang Khiếu Nại</span></div>`;
+                else if (row.appeal_status === 'RESOLVED') appealBadge = `<div class="mt-1"><span class="bg-green-100 text-green-700 text-[10px] px-1.5 py-0.5 rounded font-bold uppercase">Đã Giải Quyết</span></div>`;
+
+                tr.innerHTML = `
+                    <td class="py-3 px-4 font-semibold text-gray-800">
+                        ${row.user ? row.user.full_name : 'N/A'}
+                        ${isKicked ? `<div class="mt-1"><span class="bg-red-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Bị Loại</span></div>` : ''}
+                        ${appealBadge}
+                    </td>
+                    <td class="py-3 px-4">
+                        <span class="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs font-semibold uppercase tracking-wider">${row.role}</span>
+                    </td>
+                    <td class="py-3 px-4 text-gray-600">${formatVND(row.base_share)}</td>
+                    <td class="py-3 px-4">
+                        <span class="font-medium text-gray-800">${formatVND(row.model_cut_amount)}</span>
+                        ${row.model_type ? `<br><span class="text-[11px] text-gray-400 font-semibold uppercase">Model ${row.model_type}</span>` : ''}
+                    </td>
+                    <td class="py-3 px-4 text-center">
+                        <span class="font-bold text-lg ${row.report_grade === 'A' ? 'text-green-500' : 'text-orange-500'}">
+                            ${row.report_grade || '-'} 
+                        </span>
+                        <br><span class="text-[11px] text-gray-400 font-medium">(x${row.grade_multiplier})</span>
+                    </td>
+                    <td class="py-3 px-4 text-center">
+                        <span class="text-red-500 font-medium">-${formatVND(row.penalty_amount)}</span>
+                        <br><span class="text-[11px] text-gray-400 font-medium">(${row.late_task_count} task trễ)</span>
+                    </td>
+                    
+                    <td class="py-3 px-4 font-semibold text-orange-600 text-right">
+                        -${formatVND(taxAmount)}
+                    </td>
+
+                    <td class="py-3 px-4 font-bold text-green-600 text-lg text-right bg-green-50/30">
+                        ${formatVND(row.calculated_amount)}
+                    </td>
+                    
+                    <td class="py-3 px-4 bg-indigo-50/30" style="display: ${isDirector ? 'table-cell' : 'none'}">
+                        <div class="relative">
+                            <input type="number" 
+                                class="w-full border ${row.is_overridden ? 'border-orange-400 bg-orange-50' : 'border-gray-300'} rounded-md px-2 py-1.5 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-right font-medium text-gray-700 ${!isDraft ? 'bg-gray-100 cursor-not-allowed opacity-70' : ''}" 
+                                placeholder="Tự động..." 
+                                value="${row.final_override_amount !== null ? row.final_override_amount : ''}"
+                                ${!isDraft ? 'disabled' : ''}
+                                onchange="updateOverride('${row.id}', this.value)"
+                                title="Nhập số tiền và Enter/Click ra ngoài để lưu">
+                            ${row.is_overridden ? `<span class="absolute -top-2 -right-1 flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span></span>` : ''}
+                        </div>
+                    </td>
+
+                    <td class="py-3 px-4 text-center space-y-1.5">
+                        <button onclick="showMetadata('${row.id}')" class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-3 py-1.5 rounded-md text-xs font-semibold block w-full text-left transition shadow-sm">
+                            ℹ️ Giải trình
+                        </button>
+                        ${!isDirector && isDraft ? `
+                            <button onclick="appeal('${row.id}')" class="bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 px-3 py-1.5 rounded-md text-xs font-semibold block w-full text-left transition shadow-sm">
+                                ⚠️ Khiếu nại
+                            </button>
+                        ` : ''}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // ==========================================
+        // 5. ACTIONS (MUTATIONS)
+        // ==========================================
+        async function updateOverride(detailId, value) {
+            try {
+                // Nếu xóa rỗng -> Gửi null để reset về tính toán tự động
+                const payload = value.trim() === '' ? null : Number(value);
+                
+                showStatus('Đang lưu thay đổi...', 'info');
+                const res = await fetch(`${API_URL}/detail/${detailId}/override`, {
+                    method: 'PUT',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ final_override_amount: payload })
+                });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.message);
+                
+                showStatus('Đã cập nhật tiền thành công!', 'success');
+                loadData(); // Reload để render lại UI (cập nhật màu cam của ô override)
+            } catch (err) {
+                showStatus(`Lỗi: ${err.message}`, 'error');
+                loadData(); 
+            }
+        }
+
+        async function finalizeSheet() {
+            if(!confirm("Chốt sổ dự án này?\nSau khi chốt sẽ KHÔNG THỂ CHỈNH SỬA, và hệ thống sẽ khóa chức năng khiếu nại!")) return;
+            try {
+                showStatus('Đang xử lý chốt sổ...', 'info');
+                const res = await fetch(`${API_URL}/project/${currentProjectId}/finalize`, {
+                    method: 'POST',
+                    headers: getHeaders()
+                });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.message);
+                
+                showStatus('🎉 Chốt sổ thành công!', 'success');
+                loadData(); 
+            } catch (err) {
+                showStatus(`Lỗi chốt sổ: ${err.message}`, 'error');
+            }
+        }
+
+        async function recalculateSheet() {
+            if(!confirm("Chạy lại hệ thống tính toán?\nToàn bộ dữ liệu hiệu suất (Report, Task) sẽ được lấy mới nhất.\n(Các con số đã được Viện trưởng ghi đè tay vẫn sẽ được giữ nguyên).")) return;
+            try {
+                showStatus('Đang chạy lại Core Math...', 'info');
+                const res = await fetch(`${API_URL}/project/${currentProjectId}/recalculate`, {
+                    method: 'POST',
+                    headers: getHeaders()
+                });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.message);
+                
+                showStatus('Tính toán lại thành công!', 'success');
+                loadData();
+            } catch (err) {
+                showStatus(`Lỗi tính toán: ${err.message}`, 'error');
+            }
+        }
+
+        async function appeal(detailId) {
+            const reason = prompt("Vui lòng nhập lý do khiếu nại (Ví dụ: Chấm sai điểm báo cáo tuần 2):");
+            if (!reason || reason.trim() === '') return;
+            
+            try {
+                showStatus('Đang gửi khiếu nại...', 'info');
+                const res = await fetch(`${API_URL}/detail/${detailId}/appeal`, {
+                    method: 'POST',
+                    headers: getHeaders(),
+                    body: JSON.stringify({ reason: reason.trim() })
+                });
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.message);
+                
+                showStatus('Đã gửi khiếu nại lên Viện trưởng thành công!', 'success');
+                loadData(); 
+            } catch (err) {
+                showStatus(`Lỗi gửi khiếu nại: ${err.message}`, 'error');
+            }
+        }
+
+        // ==========================================
+        // 6. UI MODAL
+        // ==========================================
+        function showMetadata(detailId) {
+            const content = document.getElementById('modalContent');
+            
+            // 🛡️ BƯỚC 1: Tìm data gốc từ biến currentSheetData bằng ID
+            const rowData = currentSheetData.details.find(d => d.id === detailId);
+            if (!rowData) return;
+
+            let data = {};
+            try { 
+                // Parse an toàn chuỗi penalty_metadata của dòng đó
+                data = JSON.parse(rowData.penalty_metadata || '{}'); 
+            } catch(e) {
+                console.error("Lỗi parse JSON:", e);
+            }
+            
+            let html = '';
+
+            if (data.late_reports && data.late_reports.length > 0) {
+                html += `
+                <div class="mb-4">
+                    <h4 class="font-bold text-red-600 border-b border-red-100 pb-1 mb-2 flex items-center gap-2"><span>📄</span> Báo cáo nộp trễ (${data.late_reports.length})</h4>
+                    <ul class="list-disc pl-6 text-gray-700 space-y-1">`;
+                data.late_reports.forEach(r => html += `<li><span class="font-semibold">Tuần ${r.week}</span> <span class="text-xs text-gray-400 ml-1">(Hạn: ${new Date(r.due).toLocaleDateString('vi-VN')})</span></li>`);
+                html += `</ul></div>`;
+            }
+
+            if (data.late_tasks && data.late_tasks.length > 0) {
+                html += `
+                <div class="mb-4">
+                    <h4 class="font-bold text-red-600 border-b border-red-100 pb-1 mb-2 flex items-center gap-2"><span>✅</span> Task hoàn thành trễ (${data.late_tasks.length})</h4>
+                    <ul class="list-disc pl-6 text-gray-700 space-y-1">`;
+                // Đã fix lỗi r.due thành t.due ở đây
+                data.late_tasks.forEach(t => html += `<li><span class="font-semibold">${t.title}</span> <span class="text-xs text-gray-400 ml-1">(Hạn: ${new Date(t.due).toLocaleDateString('vi-VN')})</span></li>`);
+                html += `</ul></div>`;
+            }
+
+            if (data.info) {
+                html += `
+                <div class="bg-blue-50 border border-blue-100 p-3 rounded-lg text-blue-900 shadow-sm mt-2">
+                    <div class="font-bold flex items-center gap-2 mb-2"><span>💰</span> Nguồn gốc thu nhập:</div>
+                    <p class="text-sm mb-2 opacity-90">${data.info}</p>`;
+                if (data.sources && data.sources.length > 0) {
+                    html += `<ul class="list-none space-y-1.5 mt-3 border-t border-blue-200/50 pt-2">`;
+                    data.sources.forEach(s => html += `
+                        <li class="flex justify-between text-sm">
+                            <span class="text-blue-800">Từ thành viên: <b>${s.name}</b></span>
+                            <span class="font-bold text-green-600">+${formatVND(s.amount)}</span>
+                        </li>`);
+                    html += `</ul>`;
+                }
+                html += `</div>`;
+            }
+
+            if (html === '') {
+                html = `
+                <div class="text-center py-6">
+                    <div class="text-4xl mb-3">🎉</div>
+                    <p class="text-green-600 font-bold text-lg">Tuyệt vời!</p>
+                    <p class="text-gray-500">Bạn không vi phạm bất kỳ Task hay Report nào.</p>
+                </div>`;
+            }
+            
+            content.innerHTML = html;
+            document.getElementById('infoModal').classList.add('active');
+        }
+
+        function closeModal(id) { 
+            document.getElementById(id).classList.remove('active'); 
+        }
+        // ==========================================
+        // 7. EXPORT / IMPORT EXCEL
+        // ==========================================
+        
+        async function handleExport() {
+            try {
+                showStatus('Đang tạo file Excel...', 'info');
+                const res = await fetch(`${API_URL}/project/${currentProjectId}/export`, {
+                    method: 'GET',
+                    headers: getHeaders() 
+                });
+
+                if (!res.ok) {
+                    const json = await res.json();
+                    throw new Error(json.message || 'Lỗi xuất file');
+                }
+
+                // 🌟 ĐỌC TÊN FILE TỪ HEADER DO BACKEND GỬI TRẢ VỀ
+                let fileName = `BangTinhThuong_${currentProjectId}.xlsx`; // Mặc định
+                const disposition = res.headers.get('Content-Disposition');
+                if (disposition && disposition.includes('filename=')) {
+                    // Cắt chuỗi để lấy ra cái tên file (vd: filename=BangTinhThuong_Du_an_A_PRJ01.xlsx)
+                    fileName = disposition.split('filename=')[1].split(';')[0].replace(/['"]/g, '');
+                }
+
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName; // 🌟 Gán đúng tên file chuẩn vào đây
+                document.body.appendChild(a);
+                a.click();
+                
+                window.URL.revokeObjectURL(url);
+                a.remove();
+                
+                showStatus('Xuất Excel thành công!', 'success');
+            } catch (err) {
+                showStatus(`Lỗi Xuất Excel: ${err.message}`, 'error');
+            }
+        }
+
+        async function handleImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('excel_file', file); // Tên field 'excel_file' phải khớp với upload.single() ở Route
+
+            try {
+                showStatus('Đang upload và xử lý file Excel...', 'info');
+                const res = await fetch(`${API_URL}/project/${currentProjectId}/import`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${jwtToken}`
+                        // QUAN TRỌNG: KHÔNG SET Content-Type là application/json ở đây.
+                        // Khi gửi FormData, trình duyệt sẽ tự động set Content-Type là multipart/form-data.
+                    },
+                    body: formData
+                });
+                
+                const json = await res.json();
+                if (!res.ok) throw new Error(json.message || 'Lỗi xử lý file Excel từ Server');
+
+                showStatus(`Import thành công ${json.data?.successCount || 0} dòng!`, 'success');
+                document.getElementById('importFile').value = ''; // Reset lại thẻ input để có thể chọn lại file cũ nếu muốn
+                
+                // Gọi API tải lại bảng lương để render dữ liệu mới ra web
+                loadData(); 
+            } catch (err) {
+                showStatus(`Lỗi Import: ${err.message}`, 'error');
+                document.getElementById('importFile').value = ''; 
+            }
+        }
+    </script>
+</body>
+</html>

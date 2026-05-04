@@ -30,6 +30,10 @@ const env = {
     pass: process.env.SMTP_PASS,
   },
 
+  groq: {
+    apiKey: process.env.GROQ_API_KEY || '',
+  },
+
   clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',
 
   google: {
